@@ -1,0 +1,107 @@
+"""
+analysis/zscore_peth.py
+------------------------
+Single-click Z-Score PETH: extract and z-score a window around one
+event. get_zscore_slice is also the shared building block event_peth.py
+and peak_finder.py call per-event/per-trial, so a bug fix or behavior
+change here (e.g. how the baseline is protected from artefacts) applies
+everywhere a peri-event window gets z-scored, not just this one tool.
+"""
+
+import numpy as np
+
+from ..numeric import as_float64
+from .shared import window_around
+
+# How far (in robust SDs) a baseline sample may sit from the baseline's median before it is pulled in for the
+# mean/SD — see _baseline_mean_std. Named so provenance can report it.
+BASELINE_ROBUST_SD = 5.0
+
+
+def get_zscore_slice(time_array, signal, center_t, window=None, pre=None, post=None):
+    """
+    Extract and z-score a time window around an event.
+
+    Supports either a symmetric `window` (split evenly before/after
+    center_t, legacy behaviour) or an asymmetric `pre`/`post` pair — e.g.
+    10s before the event and 20s after. If pre/post are given they take
+    precedence over window.
+
+    Parameters
+    ----------
+    time_array : array
+    signal : array
+    center_t : float
+        Event time in seconds
+    window : float or None
+        Total window size in seconds, split evenly before/after center_t.
+        Ignored if pre/post are given.
+    pre : float or None
+        Seconds before center_t to include. Defaults to window/2.
+    post : float or None
+        Seconds after center_t to include. Defaults to window/2.
+
+    Returns
+    -------
+    (time segment, z-scored signal)
+    """
+    seg_x, seg_y = window_around(time_array, signal, center_t, window, pre, post)
+    if seg_y.size == 0:                       # nothing in the window (an event past the recording's end): no statistics to take
+        return seg_x, np.zeros_like(seg_y)
+
+    # Baseline is the pre-event portion — the part of the window that
+    # actually precedes the event, not just "the first half of the segment"
+    # (those differ once pre != post).
+    baseline_mask   = seg_x < center_t
+    baseline_period = seg_y[baseline_mask] if baseline_mask.any() else seg_y
+    mu, std = _baseline_mean_std(baseline_period)
+
+    # "Flat" means the baseline's spread is down at floating-point rounding
+    # level next to its own size — a relative test, so it doesn't depend on
+    # the units the signal is in.
+    scale = np.max(np.abs(baseline_period)) if baseline_period.size else 0.0
+    if std == 0 or std <= 1e-12 * scale:
+        return seg_x, np.zeros_like(seg_y)
+
+    return seg_x, (seg_y - mu) / std
+
+
+def _baseline_mean_std(baseline, n_robust_sd=BASELINE_ROBUST_SD):
+    """
+    Mean and SD of a baseline window, protected from artefact samples.
+
+    Samples further than `n_robust_sd` robust standard deviations (1.4826 x
+    the median absolute deviation) from the baseline's median are pulled in
+    to that limit before the mean and SD are taken, so a brief motion spike
+    inside the baseline can't inflate the SD and shrink every z-score in the
+    trial. The limit is relative to the baseline's own spread, so the result
+    is the same whatever units the signal is in, and only the baseline
+    statistics are treated this way — the samples being scored are never
+    altered, so a large real response keeps its real height.
+    """
+    med = np.median(baseline)
+    robust_sd = 1.4826 * np.median(np.abs(baseline - med))
+    if robust_sd > 0:
+        baseline = np.clip(baseline, med - n_robust_sd * robust_sd, med + n_robust_sd * robust_sd)
+    return np.mean(baseline), np.std(baseline)
+
+
+def bin_for_heatmap(z_seg, num_bins=300):
+    """
+    Bin a signal into equal segments for heatmap plotting.
+
+    Parameters
+    ----------
+    z_seg : array
+    num_bins : int
+
+    Returns
+    -------
+    array
+        Binned signal
+    """
+    if z_seg is None or len(z_seg) == 0:
+        return np.zeros(num_bins)
+    z_seg = as_float64(z_seg)
+    bin_edges = np.linspace(0, len(z_seg), num_bins + 1).astype(int)
+    return np.array([np.mean(z_seg[bin_edges[i]:bin_edges[i+1]]) for i in range(num_bins)])

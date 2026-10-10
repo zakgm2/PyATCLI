@@ -1,6 +1,6 @@
 # Text Field Study — Methodology
 
-This explains why `text_field_study.py` and `field_study_validation.py`'s
+This explains why `fieldstudy/study.py` and `fieldstudy/validation.py`'s
 statistical approach is sound, stage by stage — useful if anyone (an
 advisor, a reviewer, a collaborator) asks why this is mathematically
 defensible.

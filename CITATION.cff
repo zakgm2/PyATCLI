@@ -2,19 +2,21 @@
 # Zenodo reads it when it archives a release. Update `version` and `date-released`
 # at every release (and add the Zenodo `doi:` once the first archive exists).
 cff-version: 1.2.0
-message: "If you use PhysicsLibrary in your research, please cite it using the metadata below."
-title: "PhysicsLibrary (ZaksPhysicsLibrary): data processing and analysis library for PyAT"
+message: "If you use PyATCLI in your research, please cite it using the metadata below."
+title: "PyATCLI: analysis library, engine and command line for PyAT"
 type: software
-version: "2026.9.24"
-date-released: "2026-09-24"
-repository-code: "https://github.com/zakgm2/PhysicsLibrary"
-repository-artifact: "https://pypi.org/project/ZaksPhysicsLibrary/"
-url: "https://github.com/zakgm2/PhysicsLibrary"
+version: "2026.10.10"
+date-released: "2026-10-10"
+repository-code: "https://github.com/zakgm2/PyATCLI"
+repository-artifact: "https://pypi.org/project/PyATCLI/"
+url: "https://github.com/zakgm2/PyATCLI"
 abstract: >-
-  Data processing and analysis library behind PyAT (Python Analysis Tool): fibre-photometry
+  The analysis library, engine and command line behind PyAT (Python Analysis Tool): fibre-photometry
   (TDT) motion and photobleaching correction, dF/F, event-locked z-score PETH, peak finding,
-  AUC, FFT and curve fitting, plus loaders for Oxysoft NIRS, generic tabular data and Terranova
-  EFNMR files. It contains no GUI code of its own.
+  AUC, FFT, curve fitting and group (mixed-model) statistics, plus loaders for Oxysoft NIRS, generic
+  tabular data and Terranova EFNMR files, and a provenance record for every result so it can be
+  reproduced. It draws nothing and contains no GUI code. Called PhysicsLibrary (PyPI:
+  ZaksPhysicsLibrary) before it became PyATCLI.
 keywords:
   - fibre photometry
   - neuroscience

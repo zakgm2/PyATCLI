@@ -4,9 +4,9 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ZaksPhysicsLibrary"
-version = "2026.9.28"
-description = "Data processing and analysis library for TDT, Oxysoft NIRS, Terranova EFNMR lab data, and text-field studies"
+name = "PyATCLI"
+version = "2026.10.10"
+description = "The analysis library, engine and command line behind PyAT: TDT fibre photometry, Oxysoft NIRS, Terranova EFNMR and text-field studies, with provenance records (formerly PhysicsLibrary)"
 requires-python = ">=3.10"
 readme = "README.md"
 license = "AGPL-3.0-only"
@@ -14,12 +14,13 @@ license-files = ["LICENSE"]
 authors = [
     { name = "zakgm2" },
 ]
-keywords = ["physics", "neuroscience", "fibre-photometry", "NIRS", "TDT", "EFNMR", "signal-processing", "text-analysis", "nlp"]
+keywords = ["pyat", "physics", "neuroscience", "fibre-photometry", "NIRS", "TDT", "EFNMR", "signal-processing", "text-analysis", "nlp", "reproducibility"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Operating System :: OS Independent",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering",
@@ -37,10 +38,14 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/zakgm2/PhysicsLibrary"
-Repository = "https://github.com/zakgm2/PhysicsLibrary"
-Changelog = "https://github.com/zakgm2/PhysicsLibrary/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/zakgm2/PyATCLI"
+Repository = "https://github.com/zakgm2/PyATCLI"
+Changelog = "https://github.com/zakgm2/PyATCLI/blob/main/CHANGELOG.md"
+
+[project.scripts]
+# `pyatcli run ...` / `pyatcli reproduce ...` — the same as `python -m PyATCLI` (see PyATCLI/cli/)
+pyatcli = "PyATCLI.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["PhysicsLibrary*"]
+include = ["PyATCLI*"]

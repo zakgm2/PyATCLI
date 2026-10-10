@@ -220,3 +220,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# The command line's default output folders (--out) and machine-specific shortcuts: not repo content
+pyatcli-output/
+pyatcli-batch/
+physicslib-output/
+physicslib-batch/
+*.lnk

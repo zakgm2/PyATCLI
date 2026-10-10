@@ -6,15 +6,15 @@ import unittest
 import numpy as np
 from numpy.testing import assert_allclose
 
-from PhysicsLibrary import models
-from PhysicsLibrary.analysis.auc import compute_auc_from_trace
-from PhysicsLibrary.analysis.curve_fit import compute_slope_segment, fit_model_to_segment
-from PhysicsLibrary.analysis.event_peth import (
+from PyATCLI import models
+from PyATCLI.analysis.auc import compute_auc_from_trace
+from PyATCLI.analysis.curve_fit import compute_slope_segment, fit_model_to_segment
+from PyATCLI.analysis.event_peth import (
     compute_auc_matrix, compute_event_zscore_peth, compute_group_stats,
     compute_peri_event_from_trace, compute_peri_event_matrix,
 )
-from PhysicsLibrary.analysis.peak_finder import find_peak_near_events, find_significant_peaks
-from PhysicsLibrary.analysis.zscore_peth import bin_for_heatmap, get_zscore_slice
+from PyATCLI.analysis.peak_finder import find_peak_near_events, find_significant_peaks
+from PyATCLI.analysis.zscore_peth import bin_for_heatmap, get_zscore_slice
 
 
 def _trace_with_events(fs=20.0, seconds=400, event_times=(100, 200, 300), amp=1.0, latency=2.0,
@@ -132,6 +132,16 @@ class TestZScoreSlice(unittest.TestCase):
                 _, z = get_zscore_slice(t, np.full_like(t, level), 50.0, pre=10, post=10)
                 self.assertTrue(np.all(z == 0))
 
+
+    def test_a_window_with_no_samples_gives_empty_arrays_and_no_numpy_warnings(self):
+        """An event past the end of the recording has nothing to z-score; that must not shout RuntimeWarnings
+        ("Mean of empty slice") on the way to the empty result."""
+        import warnings
+        x = np.arange(0, 100, 0.1)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            seg_x, z = get_zscore_slice(x, np.sin(x), 500.0, pre=10, post=20)
+        self.assertEqual((len(seg_x), len(z)), (0, 0))
 
 class TestHeatmapBinning(unittest.TestCase):
     def test_bins_are_equal_width_means(self):

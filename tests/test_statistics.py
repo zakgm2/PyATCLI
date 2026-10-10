@@ -11,13 +11,19 @@ import pandas as pd
 from numpy.testing import assert_allclose
 from scipy import stats
 
-from PhysicsLibrary.field_study_validation import (
-    benjamini_hochberg, bootstrap_mean_ci, cohens_d, leave_one_out_sensitivity,
+from PyATCLI.fieldstudy.validation import (
+    benjamini_hochberg,
+    bootstrap_mean_ci,
+    cohens_d,
+    leave_one_out_sensitivity,
     wordcount_controlled_regression,
 )
-from PhysicsLibrary.text_field_study import (
-    compute_delta_vector, compute_paired_similarity, flag_low_quality,
-    permutation_test_similarity, wordcount_confound_check,
+from PyATCLI.fieldstudy.study import (
+    compute_delta_vector,
+    compute_paired_similarity,
+    flag_low_quality,
+    permutation_test_similarity,
+    wordcount_confound_check,
 )
 
 

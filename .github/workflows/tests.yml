@@ -19,9 +19,9 @@ jobs:
         python-version: ["3.10", "3.13"]   # oldest supported (see requires-python) and a recent one
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -33,6 +33,38 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install "numpy>=2.0" scipy tdt pandas openpyxl statsmodels scikit-learn tqdm
 
-      # Run from the repo root so `import PhysicsLibrary` picks up this checkout.
+      # Run from the repo root so `import PyATCLI` picks up this checkout.
       - name: Run tests
         run: python -m unittest discover -s tests -v
+
+  # The library is used by PyAT, which talks to its engine and reads the tables and recordings it returns (ENGINE_CONTRACT.json says what a caller can
+  # count on). This runs PyAT's own tests against this checkout of the library, so a change that the app cannot live with is seen here, before release.
+  # It looks at PyAT's main branch: if this change is meant to break the contract (a raised ops.PROTOCOL_VERSION), this job is red until PyAT
+  # speaks the new protocol (backend/contract.py there) — which is the point of it.
+  gui-compat:
+    runs-on: windows-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: library
+
+      - uses: actions/checkout@v7
+        with:
+          repository: zakgm2/PyAT
+          path: app
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "numpy>=2.0" scipy tdt pandas openpyxl statsmodels scikit-learn tqdm matplotlib packaging PyQt6 pyqtgraph
+          python -m pip install --no-deps ./library
+
+      - name: Run PyAT's tests against this library
+        working-directory: app
+        run: python -m unittest discover -s tests -t . -v

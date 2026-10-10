@@ -1,0 +1,259 @@
+"""
+sources/processing_oxysoft.py
+-----------------------------
+Reading Oxysoft / Artinis NIRS .txt exports (Oxymon, OctaMon, PortaMon, ...) into channel arrays:
+the Legend-block parser for one file, and the folder / single-file readers built on it. The
+counterpart of processing_TDT.py for the other supported recording format — load.py's load_oxysoft
+only wraps the result into a Dataset, the same way its load_tdt wraps processing_TDT.
+
+Unlike TDT there is no signal processing here (an Oxysoft export already holds delta-concentrations),
+so "processing" is parsing: find the channels from the Legend, read the numeric rows, pull out the
+event column, and (for a folder) concatenate the exports in alphabetical order.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+from typing import Optional
+
+import numpy as np
+
+from ..numeric import as_float64
+from ..progress import Plan
+
+_PROGRESS_CHUNK = 1 << 18   # bytes read between progress ticks (tqdm throttles the rest)
+
+
+def process_oxysoft_folder(folder_path: str, progress=None) -> dict:
+    """
+    Parse an Oxysoft TXT export folder.
+    Multiple .txt files are concatenated in alphabetical order.
+
+    `progress` (None, True or callable(fraction, message); see
+    PyATCLI.progress) is weighted by each file's size in bytes.
+
+    Returns
+    -------
+    dict
+        o2hb, hhb       : np.ndarray, shape (n_channels, n_samples)
+        events          : list of {'label': str, 'sample': int}
+        metadata        : dict from the first file, plus "n_channels"
+        channel_labels  : list[str], e.g. ['Tx1', 'Tx2', 'Tx3']
+        sample_rate     : float (Hz), from the first file
+    """
+    txt_files = sorted(
+        f for f in os.listdir(folder_path) if f.lower().endswith('.txt')
+    )
+    if not txt_files:
+        raise FileNotFoundError(f"No .txt files found in: {folder_path}")
+
+    sizes = {f: os.path.getsize(os.path.join(folder_path, f)) or 1 for f in txt_files}
+    plan = Plan(progress, [(f, sizes[f]) for f in txt_files] + [("Combining files", 0.02 * sum(sizes.values()))])
+
+    all_o2hb:  list[np.ndarray] = []
+    all_hhb:   list[np.ndarray] = []
+    all_events: list[dict]      = []
+    metadata:   dict            = {}
+    ch_labels:  list[str]       = []
+    sample_rate: float          = 0.0
+    first_file = True
+
+    for fname in txt_files:
+        fpath = os.path.join(folder_path, fname)
+        o2hb, hhb, events, meta, labels, fs = _parse_oxysoft_txt(fpath, progress=plan.sub(fname))
+
+        if first_file:
+            metadata    = meta
+            ch_labels   = labels
+            sample_rate = fs
+            first_file  = False
+
+        all_o2hb.append(o2hb)
+        all_hhb.append(hhb)
+        all_events.extend(events)
+
+    plan.begin("Combining files")
+    # o2hb / hhb: shape (n_channels, n_samples)
+    o2hb_concat = np.concatenate(all_o2hb, axis=1)
+    hhb_concat  = np.concatenate(all_hhb,  axis=1)
+    plan.done()
+
+    return {
+        "o2hb":           o2hb_concat,
+        "hhb":            hhb_concat,
+        "events":         all_events,
+        "metadata":       {**metadata, "n_channels": o2hb_concat.shape[0]},   # physical channels (not * 2)
+        "channel_labels": ch_labels,
+        "sample_rate":    sample_rate,
+    }
+
+
+def process_oxysoft_file(file_path: str, progress=None) -> dict:
+    """Parse a single Oxysoft .txt export; returns the same dict as process_oxysoft_folder.
+
+    `progress` (None, True or callable(fraction, message); see
+    PyATCLI.progress) follows the file as it is read.
+    """
+    o2hb, hhb, events, metadata, ch_labels, sample_rate = _parse_oxysoft_txt(file_path, progress=progress)
+    if o2hb.ndim < 2 or o2hb.shape[0] == 0:
+        raise ValueError(
+            f"No O2Hb channels recognized in the Legend block of {os.path.basename(file_path)} — "
+            "this file's column labels don't match what this parser expects "
+            "(looks for 'O2Hb' in each Legend row's description). The file may use a "
+            "different Oxysoft export format/version than this parser was built against."
+        )
+    return {
+        "o2hb":           o2hb,
+        "hhb":            hhb,
+        "events":         events,
+        "metadata":       {**metadata, "n_channels": o2hb.shape[0]},
+        "channel_labels": ch_labels,
+        "sample_rate":    sample_rate,
+    }
+
+
+def _parse_oxysoft_txt(
+    filepath: str,
+    progress=None,
+) -> tuple[np.ndarray, np.ndarray, list[dict], dict, list[str], float]:
+    """
+    Parse a single Oxysoft .txt file.
+
+    The Oxysoft format has a Legend block that maps column numbers to
+    channel names, followed by a numeric header row (1  2  3 ...) and
+    then the data. Row 0 is absolute baseline and is skipped.
+
+    `progress` follows the bytes read (the total isn't known in lines
+    without a second pass over the file); see PyATCLI.progress.
+
+    Returns
+    -------
+    o2hb          : np.ndarray  shape (n_channels, n_samples)
+    hhb           : np.ndarray  shape (n_channels, n_samples)
+    events        : list of {'label': str, 'sample': int}
+    metadata      : dict
+    channel_labels: list[str]  e.g. ['Tx1', 'Tx2', 'Tx3']
+    sample_rate   : float (Hz)
+    """
+    metadata:  dict  = {}
+    events:    list  = []
+    data_rows: list  = []
+    sample_rate      = 0.0
+
+    # Will be filled from the Legend block
+    # col_index → ('O2Hb' | 'HHb', channel_label)
+    col_map: dict[int, tuple[str, str]] = {}
+    event_col: Optional[int] = None
+
+    in_legend       = False
+    in_data         = False
+    fit_factor_col: Optional[int] = None
+
+    plan = Plan(progress, [("Reading file", 92), ("Building channels", 8)])
+    size = os.path.getsize(filepath)
+    unreported = 0
+
+    with plan.bar("Reading file", size) as bar, \
+            open(filepath, 'r', encoding='utf-8', errors='replace') as fh:
+        for raw_line in fh:
+            unreported += len(raw_line)
+            if unreported >= _PROGRESS_CHUNK:
+                bar.update(unreported)
+                unreported = 0
+
+            line  = raw_line.rstrip('\n')
+            parts = line.split('\t')
+
+            # ---- metadata -----------------------------------------------
+            if not in_legend and not in_data:
+                if 'sample rate' in line.lower():
+                    try:
+                        sample_rate = float(parts[1].strip().split()[0])
+                    except (IndexError, ValueError):
+                        pass
+
+                if line.strip() == 'Legend:':
+                    in_legend = True
+                    continue
+
+            # ---- legend block -------------------------------------------
+            if in_legend:
+                # The column-number header row signals end of legend
+                stripped = [p.strip() for p in parts]
+                if all(p.isdigit() for p in stripped if p):
+                    in_legend = False
+                    in_data   = True
+                    continue
+
+                # Legend rows look like: "2\tRx1 - Tx1 O2Hb (filename)"
+                if len(parts) >= 2:
+                    try:
+                        col_idx  = int(parts[0].strip())
+                        col_desc = parts[1].strip()
+                    except ValueError:
+                        continue
+
+                    if '(Event)' in col_desc or 'Event' in col_desc:
+                        event_col = col_idx - 1   # convert to 0-based
+                    elif 'O2Hb' in col_desc:
+                        m = re.search(r'Tx\d+', col_desc)
+                        label = m.group(0) if m else f"Ch{col_idx}"
+                        col_map[col_idx - 1] = ('O2Hb', label)
+                    elif 'HHb' in col_desc:
+                        m = re.search(r'Tx\d+', col_desc)
+                        label = m.group(0) if m else f"Ch{col_idx}"
+                        col_map[col_idx - 1] = ('HHb', label)
+                    elif 'Fit Factor' in col_desc:
+                        fit_factor_col = col_idx - 1   # 0-based
+                    # TSI%, sample number → ignored
+                continue
+
+            # ---- data section -------------------------------------------
+            if not in_data or len(parts) < 2:
+                continue
+
+            try:
+                row = [float(p) if p.strip() else 0.0 for p in parts]
+            except ValueError:
+                continue
+
+            # Skip row 0 — absolute baseline, not delta values
+            sample_num = int(row[0])
+            if sample_num == 0:
+                continue
+
+            data_rows.append(row)
+
+            # Events
+            if event_col is not None and event_col < len(row):
+                ev = parts[event_col].strip() if event_col < len(parts) else ''
+                if ev and ev != '0':
+                    events.append({'label': ev, 'sample': len(data_rows) - 1})
+
+    if not data_rows:
+        raise ValueError(f"No data rows parsed from {filepath}")
+
+    plan.begin("Building channels")
+    data = np.array(data_rows, dtype=np.float64)  # (n_samples, n_cols)
+
+    # Sort col_map into ordered O2Hb and HHb columns
+    o2hb_cols = sorted(
+        [(idx, label) for idx, (kind, label) in col_map.items() if kind == 'O2Hb'],
+        key=lambda x: x[1]
+    )
+    hhb_cols = sorted(
+        [(idx, label) for idx, (kind, label) in col_map.items() if kind == 'HHb'],
+        key=lambda x: x[1]
+    )
+
+    channel_labels = [label for _, label in o2hb_cols]
+
+    o2hb = as_float64(np.array([data[:, idx] for idx, _ in o2hb_cols]))  # (n_ch, n_samp)
+    hhb  = as_float64(np.array([data[:, idx] for idx, _ in hhb_cols]))   # (n_ch, n_samp)
+
+    if fit_factor_col is not None and fit_factor_col < data.shape[1]:
+        metadata['fit_factor_mean'] = float(np.mean(data[:, fit_factor_col]))
+
+    plan.done()
+    return o2hb, hhb, events, metadata, channel_labels, sample_rate

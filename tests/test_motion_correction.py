@@ -11,9 +11,14 @@ import warnings
 import numpy as np
 from numpy.testing import assert_allclose
 
-from PhysicsLibrary.processing_TDT import (
-    REGRESSION_METHODS, _robust_linear_fit, compute_dff, correct_bleaching,
-    debounce_events, denoise_signal, get_event_markers,
+from PyATCLI.sources.processing_TDT import (
+    REGRESSION_METHODS,
+    _robust_linear_fit,
+    compute_dff,
+    correct_bleaching,
+    debounce_events,
+    denoise_signal,
+    get_event_markers,
 )
 
 FS = 20.0                      # transients are seconds wide, so 20 Hz keeps the tests fast

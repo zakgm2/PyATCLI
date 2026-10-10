@@ -6,13 +6,13 @@ import unittest
 import numpy as np
 from numpy.testing import assert_allclose, assert_array_equal
 
-import PhysicsLibrary as pl
-from PhysicsLibrary import models
-from PhysicsLibrary.analysis.auc import compute_auc_from_trace, compute_auc_window
-from PhysicsLibrary.analysis.fft import compute_fft_slice, find_fft_peaks
-from PhysicsLibrary.analysis.intervals import compute_marker_intervals
-from PhysicsLibrary.analysis.shared import estimate_sample_rate, mean_channels, smooth_signal
-from PhysicsLibrary.splice import splice_cut_out, splice_keep_inside
+import PyATCLI as pl
+from PyATCLI import models
+from PyATCLI.analysis.auc import compute_auc_from_trace, compute_auc_window
+from PyATCLI.analysis.fft import compute_fft_slice, find_fft_peaks
+from PyATCLI.analysis.intervals import compute_marker_intervals
+from PyATCLI.analysis.shared import estimate_sample_rate, mean_channels, smooth_signal
+from PyATCLI.splice import splice_cut_out, splice_keep_inside
 
 
 class TestSharedHelpers(unittest.TestCase):

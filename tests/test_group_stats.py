@@ -13,10 +13,10 @@ import numpy as np
 import pandas as pd
 import scipy.stats as st
 
-from PhysicsLibrary.analysis import group_stats as gs
-from PhysicsLibrary.analysis import group_trials as gt
-from PhysicsLibrary.analysis.group import GroupSpec
-from PhysicsLibrary.analysis.group_report import CSV_NAMES, REPORT_FILENAME, report_text, write_group_results
+from PyATCLI.analysis.group import stats as gs
+from PyATCLI.analysis.group import trials as gt
+from PyATCLI.analysis.group import GroupSpec
+from PyATCLI.analysis.group.report import CSV_NAMES, REPORT_FILENAME, report_text, write_group_results
 
 MEASURES = ["auc", "peak", "mean", "latency", "decay"]
 

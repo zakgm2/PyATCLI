@@ -1,4 +1,218 @@
-# Changelog — PhysicsLibrary
+# Changelog — PyATCLI
+
+---
+
+## Version 2026.10.10 — PyATCLI:
+  **PhysicsLibrary is now PyATCLI.** It is the analysis library, engine and command line behind PyAT, and PyAT 4.0.0 needs it. This is a new PyPI project:
+  `ZaksPhysicsLibrary` stays on PyPI at 2026.9.28 and gets no further releases; version numbers stay release dates (this one is 2026.10.10). The two packages have different import names, so they can sit side by side while you move over; there is no alias for the old name.
+  Renamed:
+  - `pip install ZaksPhysicsLibrary` → `pip install PyATCLI`; `import PhysicsLibrary as pl` → `import PyATCLI as pl`; `python -m PhysicsLibrary` →
+    `python -m PyATCLI`; the `physicslib` command → `pyatcli`; the environment variable `PHYSICSLIB_CHECK_RESULTS` → `PYATCLI_CHECK_RESULTS`; the default
+    output folders `physicslib-output` / `physicslib-batch` → `pyatcli-output` / `pyatcli-batch`; the man page `physicslib.1` → `pyatcli.1`; the repository
+    `zakgm2/PhysicsLibrary` → `zakgm2/PyATCLI` (the old address redirects). Everything importable from the top-level package keeps its name.
+  - Modules that moved into folders (only matters if you imported a module by its path rather than the name from the package):
+    `processing_TDT`, `processing_oxysoft`, `dataset` → `sources.processing_TDT`, `sources.processing_oxysoft`, `sources.dataset`;
+    `file_parser`, `loaders.tdt_loader`, `loaders.oxysoft_loader` → `sources.load`; `file_parser_generic` → `sources.tables`; `loaders.pt2_loader` →
+    `sources.pt2`; `text_field_study` → `fieldstudy.study`; `field_study_validation` → `fieldstudy.validation`; `analysis.group` stays a module path but is
+    now a package, and `analysis.group_trials` / `group_stats` / `group_report` / `group_scan` / `group_run` → `analysis.group.trials` / `stats` /
+    `report` / `scan` / `run`.
+  - Records and settings written by PhysicsLibrary open as before (`reproduce` names a library version that differs from the running one as a warning,
+    as it always has); nothing about the files on disk changed.
+  New:
+  - **Reading results back, with no drawing: `results.open`.** `open_results(path)` (`PyATCLI.results`; the engine operation `results.open` is the
+    same) reads a finished analysis from the files it left: a group analysis's folder (or its `analysis_settings.json`), a `.provenance.json` record, a
+    folder of records or tables, or one `.csv`. It returns an `OpenedResults`: what made it (`kind`), what it was asked (`parameters`), its `tables`,
+    what the analysis said (`notes`) and ran on (`software`), and the `files` it read; `NoResults` (a `ValueError`) if there is nothing to read. It is what
+    PyAT's Open Results… asks for. A group analysis's folder holds `analysis_notes.json` (the notes
+    and software, which no table does), so a folder read back reports as the run did; and a figure exported into a group's folder no longer changes what
+    the folder opens as (the group's settings decide first).
+  - **The contract declares what is written besides an analysis's tables** (`outputs` in `ENGINE_CONTRACT.json`, `analyses.describe_outputs()`): a group
+    analysis's folder — each table with the columns that are always there and the file it is written to (`analysis.group.report.TABLE_FILES`,
+    `GROUP_TABLES`), and the settings, report and notes files — and an Export View's `data` and `markers` tables. Removing or renaming one is a breaking
+    change like any other (`engine/contract.py`); tests check that a simulated group analysis writes every declared table, column and file.
+  - `run_cli.py`, an entry point for the command line at the top of the repository: run with nothing (or double-clicked, or from a shortcut to it) it opens Git Bash in that folder, shows the commands and leaves the prompt open; run with arguments it is the command line in the terminal you are in. `--terminal` and `--inline` choose which; without Git for Windows it opens a Command Prompt, and anywhere but Windows it is always the command line itself.
+  - **Operations and the engine: the app no longer runs the library in its own process.** `ops/` is a layer of JSON-in /
+    JSON-out operations (`@operation(name, summary)`, `ops.call(name, params, ctx)`, `OpContext`, `OpError(message, code, hint)`,
+    `error_info`, `to_jsonable`; `ops.describe()` lists them) under both the command line and `python -m PyATCLI serve`,
+    so the two cannot disagree. `serve` is an engine: one JSON object per line on standard input and output
+    (`{"id", "method", "params"}` in; `ready`, `progress`, `warning`, `note`, `result`, `error` out; `{"cancel": id}`;
+    `{"method": "shutdown"}`), recordings kept open between requests (`recording.open`, `.view`, `.splice`, `.labels`, `.close`,
+    `.list`), one variant per list of splices so Ctrl+Z / removing a splice / Restore Full Recording cost nothing, and arrays handed
+    over as `.npy` files to memory-map instead of text through the pipe (`engine/wire.py`; a 17-minute TDT recording is 34 MB,
+    one trace as JSON text is 44 MB and a second to parse). PyAT's window talks to it, so a slow load or fit cannot freeze it and a
+    crash in a library cannot take it down. New operations for a window: `compute.event_peth`, `compute.peaks`, `group.scan`,
+    `group.run` (`tables="files"` hands the tables back as CSVs; the full note records
+    and software come with it), `fieldstudy.fields` / `.run` / `.validate`, `file.tables` (with the first rows), `saved.write`.
+    `recording.open` returns the recording as recorded when a saved splice was replayed, the names saved for its signals and what
+    the saved state restored; `fresh` reads the disk again. `analysis.group.rebuild.results_from_tables` takes the analysis's `notes` and
+    `software`, so results rebuilt from files report as the original does. The TDT cache carries `motion_correction_inlier_fraction`
+    (refreshed by a splice's re-fit). `Cancelled` (a `BaseException`) is exported from `progress`: a cooperative cancel raised by a
+    progress report, which `Plan` does not swallow. See API_REFERENCE.md, "Operations and the engine".
+  - For the rest of what a window does with the disk: `files.inspect` (what a path is: a TDT block, a folder with blocks under it — walked
+    at any depth —, an Oxysoft export or a table file), `pt2.load` (the EFNMR image as an `.npy` file to map), and `provenance.write`
+    (the record beside an export — the recording's fingerprint, remembered while the folder is unchanged, its state, the pipeline's settings,
+    the files made). `group.run` can save the wizard's settings first
+    (`write_settings`, `scans`), so a run that fails still leaves them, and its answer carries `settings`. The `curve_fit` summary says the
+    `view` (the stretch of signal the figure shows around the fit). `compute.event_peth` / `compute.peaks` / the `run` analyses are what
+    PyAT's windows now ask the engine for; their answers are the tables the windows export.
+  - **The command line follows the usual conventions** (`cli/` is now a package: `parser.py`, `commands.py`, `render.py`,
+    `docs.py`). Every command takes `--json` (one document `{"schema", "ok", "command", "result", "warnings"}` on standard output;
+    failures as `{"ok": false, "error": {code, message, hint, type}}` on standard error), `--plain` (tab-separated rows), `-q`,
+    `-v`, `-d/--debug` (also `DEBUG=1`), `--no-input`, `--events` (JSON event lines on standard error), `--progress` /
+    `--no-progress`, before or after the command name. Standard output is only ever the result: the TDT SDK's own chatter no
+    longer breaks `--json` (it used to print into it). No arguments prints a short help; each command's `--help` has examples;
+    `-` means standard input or output; `saved clear` asks when it can and says `--yes` when it cannot; Ctrl-C exits 130; an
+    unexpected exception is reported as a bug rather than a traceback. `group-setup` is `group setup` and `group SETTINGS` is
+    `group run SETTINGS` (the old spellings still work, with a warning).
+  - **`python -m PyATCLI docs`** writes the command line's reference — `--format markdown` (`CLI_REFERENCE.md`) or `--format
+    man` (`man/pyatcli.1`) — generated from the parser; a test regenerates both and fails if the committed files differ.
+  - Everything between "open a recording" and "run an analysis" that PyAT used to do itself now lives
+    in the library, so a script gets exactly the numbers the app shows. `recording.py`: the saved
+    state beside a recording (`saved_state_dir`, `marker_sidecar_path`, `splice_sidecar_path`,
+    `read_saved_splices`, `read_saved_markers`, ...), building a cache from a load (`make_tdt_cache`,
+    `make_oxysoft_cache`, `make_generic_cache`, `build_signal_options`, `normalized_signal`),
+    splicing (`apply_splice`, `apply_splices`, `spliced_store_name` — a TDT splice re-fits the dF/F
+    on what is left, as the app does), the one-call headless load `load_tdt_recording` (processed,
+    saved splices replayed, saved markers on top) and `find_tdt_recordings`. `markers.py`:
+    `marker_display_label`, `store_display_name`, `group_markers_by_name`.
+    `analysis/group/scan.py` and `analysis/group/run.py`: `scan_recording(s)`,
+    `default_subject_names`, `load_group_recording`, `run_group_analysis` (headless; figures are
+    the caller's, via `extra_writers`), and `write_group_settings` / `read_group_settings` for the
+    `analysis_settings.json` that makes a group analysis repeatable.
+  - `CURVE_FIT_MODELS` in `models.py`: the curve-fit registry (model, initial-guess function,
+    parameter names) the app's Curve Fit tool lists, importable by scripts.
+  - `numeric.py`: float64 is now a rule of the library, enforced rather than assumed. TDT hands its
+    streams over as float32, and numpy is unsafe on single precision at a realistic length
+    (`np.polyfit` on a float32 regressor drops the slope term past ~3 minutes at 1 kHz). Every file
+    load returns float64 — `get_tdt_struct` widens each stream as it is read, so
+    `process_tdt_folder`'s raw per-wavelength `channels` are float64 too (they were the one place
+    float32 survived into the app's analyses), and so are the Oxysoft readers, `load_any_file`,
+    `load_pt2` and `Dataset.signals` — and every public function that takes a signal, a time axis
+    or a trial matrix widens its input, so arrays from a script's own pipeline are covered as well.
+    Widening is exact: results for float64 input are unchanged, and float32 input now gives
+    bit-identical results to the same values as float64.
+  - Scripted use: every analysis PyAT offers can be run by name, from Python or the command line, and any
+    result can be reproduced from the record written beside it.
+    `analyses.py`: `run_analysis(kind, cache, parameters)` for `zscore_window`, `auc_window`, `fft_window`,
+    `curve_fit`, `event_peth`, `peak_finder`, `event_intervals` and `process`, returning an `AnalysisResult`
+    (`tables`, `parameters` as run with the defaults filled in and anything looked up in the recording, such as an
+    event's times, written out, `summary`, `notes`). Each table has the columns, in order, of the CSV PyAT exports
+    for that analysis, so a script's output compares column for column. `kinds()`, `describe_kinds()`,
+    `normalize_parameters()`, `ParameterError`, `AnalysisError`.
+  - Provenance: `provenance.py` describes how a result was produced as data — the software (library, Python,
+    platform, numerical packages, the app), a fingerprint of the recording's files, its state (splices in order,
+    motion-correction method, marker counts and digests, store renames, signal names), what the pipeline does that
+    no caller chose (filter, bleaching model, motion-correction settings, z-score baseline rule, read from the
+    constants the code uses), the analysis parameters and the output files with hashes. It holds no recording
+    data. `build_record`, `write_record`, `read_record`, `recording_state`, `file_fingerprint`,
+    `pipeline_parameters`, `software_versions`, `check_environment` and friends; PyAT writes
+    `<export>.provenance.json` beside every export.
+  - `reproduce.py`: `reproduce_record(record, recording=None, out_dir=None, compare=(), ...)` rebuilds the
+    recording in exactly the recorded state, runs the analysis with the recorded parameters and compares any
+    exports column for column (`compare_table`; `rounded=True` also accepts the digits an export shows, which is
+    what PyAT's fixed-decimal exports need). It reports a changed recording or software as warnings, or raises
+    `ReproduceError` with `strict=True`. (`PyATCLI.reproduce` stays the module; the function's top-level
+    name is `reproduce_record`.)
+  - **Drawing is PyAT's.** The library computes and writes numbers and draws nothing: it has no plotting code and no `matplotlib` dependency. The
+    figures — the analysis windows', a group analysis's, Export View, Edit Graph Attributes, and writing a figure to PNG / TIFF / PDF / SVG with the CSV
+    of its data — are `physicsanalysis_qt/figures` in PyAT, which draws from the tables the library writes (the columns each one always has are in
+    `ENGINE_CONTRACT.json`). A script that wants a picture reads the tables (`run_analysis`, `open_results`) and plots them itself.
+  - Command line: `python -m PyATCLI` (and a `pyatcli` command): `info`, `kinds`, `run`, `reproduce`,
+    `batch` (many analyses over many recordings, with combined tables) and `group` (from an
+    `analysis_settings.json`). Exit status 0 done, 1 failed, 2 bad usage, 3 an export did not match.
+  - Export View's numbers: `viewplan.py` says what the main plot of a recording shows — `plan_view(cache, signals=, xlim=, ylim=, store_labels=, attributes=)`,
+    `view_traces`, `padded_xlim`; a `ViewPlan` has the lines, the range, the markers in view and `data_table()` / `markers_table()` / `write_data()` /
+    `parameters()` — and `run_view(cache, parameters)` gives them as an `AnalysisResult`, which `reproduce_record` replays for a `view` record and compares
+    with its data CSV, so an Export View can be reproduced like any analysis. A planned line says what it is (`role`, `signal`, `key`, `csv_name`) and
+    never how it looks: PyAT styles and draws it.
+  - The rules for naming signals are the recording's: `name_problem`, `plan_signal_renames` (`recording.py`); a name must say something and two signals
+    cannot share one, and `saved_state.rename_signals` refuses a name two signals would share, as the app does.
+  - `analysis/group/rebuild.py`: `results_from_tables(tables, parameters, notes, software)` puts a group analysis's `GroupResults` back together from its
+    tables, for a viewer that shows a result that is no longer in memory.
+  - Where results go: `outputs.py` is the layout PyAT's exports use under an Output folder —
+    `<Output>/<TDT|Oxysoft|Generic|PT2|Text Field Study>/<recording> (Analysis)/` and `<Output>/Group Analysis/<group>/`
+    — with its rules: the " (Analysis)" suffix, a marker file that tells two recordings of one name apart, and " (2)"
+    instead of overwriting (`recording_dir`, `group_dir`, `unique_path`, `unique_stem`, `safe_folder_name`). PyAT now
+    calls these; the command line writes into the same folders with `--output-folder DIR` on `run`, `batch`, `group`
+    and `group-setup` (`--out DIR` still writes exactly where it is told).
+  - Saved state, written: `saved_state.py` writes what PyAT's Save Changes writes into a recording's `JSON saves/`
+    folder — markers, splices, signal names, highlights, text boxes — and PyAT's Save Changes now writes through it, so
+    the files are the same bytes either way. The writers (`write_saved_markers`, `write_saved_splices`,
+    `write_saved_signal_labels`, `write_saved_annotations`, `clear_saved_state`) refuse what the app could not read
+    back; the edits do what one action in the app does to what is already saved (`add_marker`, `remove_markers`,
+    `add_splice`, `remove_splice`, `rename_signals`, `add_highlight`, `add_text`, `saved_state_summary`; a splice stacks
+    on the saved ones, on the time axis as it now stands). `load_recording` now restores saved highlights and text boxes
+    too (`cache["highlights"]`, `cache["text_annotations"]`, as the app does); `read_saved_annotations`.
+    `python -m PyATCLI saved show|marker|unmark|splice|unsplice|rename|highlight|text|clear RECORDING ...`
+    (`clear` needs `--yes`).
+  - `group-setup` on the command line is the Hypothesis Testing wizard: it finds the recordings under a folder, lists the
+    markers they share (without `--marker`), takes the wizard's choices as options (windows, signal, smoothing,
+    measures, peak direction, correction, store renames, `--exclude`), checks the design as the wizard does and writes
+    `analysis_settings.json`; `--run` goes on to run it. `group SETTINGS --out DIR` now leaves the settings beside the
+    tables, so the folder opens under the group's own name and can be reproduced on its own.
+  - `load_recording(path, ...)`: opens a TDT folder, an Oxysoft export or a generic table file the way PyAT
+    does, with saved splices, markers and signal names applied (`use_saved=False` for the recording as recorded).
+  - Signal names: the names a person gives a recording's signals in PyAT are saved as `signal_labels.json` in
+    `JSON saves/` and applied on load; `signal_labels_path`, `read_saved_signal_labels`, `apply_signal_labels`,
+    `current_signal_labels`.
+  - `_version.py`: `__version__` (and every provenance record) reports a source checkout's own `pyproject.toml`
+    version instead of the stale one an editable install's metadata keeps until pip is re-run.
+  - **The engine's contract is written down and guarded.** Each analysis declares the tables it returns and the columns of each that are always there
+    (`analyses.TABLES`; `kinds` / `describe_kinds()` show them), and `engine/contract.py` builds the contract — the protocol number, every operation with its
+    parameters, every analysis with parameters and tables — as `ENGINE_CONTRACT.json` (`python -m PyATCLI docs --format contract`).
+    `breaking_changes(old, new)` says what a caller written against the old one would lose: an operation, parameter, analysis, choice, table or
+    always-there column that is gone, a parameter that must now be given, a type that changed, a protocol that went down. `ops.PROTOCOL_VERSION` is raised for
+    those and only those, and `tests/test_engine_contract.py` fails when the engine no longer honours `tests/contracts/protocol_N.json` (the contract as
+    protocol N began), when the file is stale, or when an analysis makes a table or lacks a column it declared. The same goes for what an operation returns
+    (`@operation(name, summary, result=[...])`: the keys of its result that are always there; `PYATCLI_CHECK_RESULTS=1` makes `ops.call` fail loudly when one is
+    missing, and the tests run with it on) and for the loaded recording (`recording.CACHE_KEYS`: the keys a TDT, Oxysoft or generic recording always has). CI also
+    runs PyAT's own tests against each push of the library (the `gui-compat` job), so a change the app cannot live with is seen before it is released. See
+    API_REFERENCE.md, "The engine".
+  Changed:
+  - **The command line and the engine draw nothing.** `python -m PyATCLI` computes and writes files (CSV tables, JSON records, settings); it never makes a figure
+    or opens a window, and a run writes nothing to a cache folder in the home directory. `tests/test_cli_conventions.py` checks that no command, option or
+    operation draws and that a whole run imports neither matplotlib nor a window toolkit.
+  - **The modules are in folders by what they do** (nothing changed in what they do). `sources/` is everything that reads a recording from
+    disk: `load.py` (`load_dataset`, `load_dataset_file`, `load_tdt`, `load_oxysoft`, `load_oxysoft_file` — the old `file_parser.py` and the
+    `loaders/tdt_loader.py` and `loaders/oxysoft_loader.py` that only wrapped a reader's result, now one module, and `loaders/` is gone),
+    `dataset.py`, `processing_TDT.py`, `processing_oxysoft.py`, `tables.py` (was `file_parser_generic.py`) and `pt2.py` (was
+    `loaders/pt2_loader.py`). `fieldstudy/` holds the text-field study (`study.py`, was `text_field_study.py`) and its validation
+    (`validation.py`, was `field_study_validation.py`). `analysis/group/` is the group analysis as a package: `analysis/group.py` is its
+    `__init__.py` and `group_trials.py`, `group_stats.py`, `group_report.py`, `group_scan.py`, `group_run.py` are `trials.py`, `stats.py`,
+    `report.py`, `scan.py`, `run.py` in it. Everything exported from `PyATCLI` itself is as it was; code that imported one of these modules by its path needs the new path (the table under
+    Renamed, above).
+  - `curve_fit` takes `window_s` (the signal shown either side of the fitted stretch, as the app's Curve Fit window does)
+    and its result carries a `context` table (that signal) and a `Model` column on `curve`, so the figure can be rebuilt
+    from the CSVs; a segment whose fit failed is kept with its fit as NaN. A group analysis result carries a
+    `mean_traces` table (what `mean_traces.csv` holds).
+  - `_parse_oxysoft_txt` and the folder / single-file readers moved out of
+    `loaders/oxysoft_loader.py` into the new `processing_oxysoft.py` (public:
+    `process_oxysoft_folder`, `process_oxysoft_file`), the counterpart of `processing_TDT.py`.
+    `loaders/oxysoft_loader.py` now only wraps the result into a `Dataset`, as
+    `loaders/tdt_loader.py` does. `load_oxysoft` / `load_oxysoft_file` and their results are
+    unchanged.
+  - `load_pt2` returns float64 (it was float32; the file stores float32).
+  - `get_plot_data` returns the sampling rate as a Python `float`.
+  - CI only: `actions/checkout` (v4→v7), `actions/setup-python` (v5→v7), `actions/upload-artifact` (v4→v7) and `actions/download-artifact` (v4→v8) in both
+    workflows, all on the Node 24-native release of each (GitHub is deprecating the Node 20 runtime they were built on). `CITATION.cff` brought up to date.
+  Fixed:
+  - A `run` request now reports progress as stages (opening the recording, then the analysis) and ends at 100%, so an analysis that is one
+    call with nothing to tick (a curve fit, a z-score window) no longer leaves a progress display at 0% until it vanishes.
+  - `API_REFERENCE.md` and `README.md` described a structure that no longer existed: every code
+    example in the API reference had its underscores backslash-escaped (a Word-export artefact, so
+    `pl.process\_tdt\_folder(...)` could not be pasted into Python), `annotate_fft_peaks` was
+    documented though the library has never drawn anything, the README listed an `analysis.py`
+    that is a package, and the optional-dependencies section said `statsmodels` was used by one
+    function. All brought in line with the code, and every documented name checked to import.
+  Known, not changed:
+  - For a folder of Oxysoft exports each event's `sample` is its index within its own file; it is
+    not shifted by the length of the files before it (documented by an expected-failure test).
+  - `validate_tdt_folder` raises `FileNotFoundError` for a path that does not exist, rather than
+    returning `(False, message)`.
+  - The registry's sinusoid starts every fit at 1 Hz, so it finds a signal only if the phase it
+    drifts from that guess across the segment stays small.
+  - A splice whose `mode` is neither `"cut_out"` nor `"keep_inside"` is read as `"keep_inside"` (as PyAT has
+    always read it) rather than rejected.
 
 ---
 

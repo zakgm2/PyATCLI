@@ -23,15 +23,15 @@ from numpy.testing import assert_allclose
 
 import tdt
 
-from PhysicsLibrary import processing_TDT as P
-from PhysicsLibrary.analysis.event_peth import compute_event_zscore_peth
-from PhysicsLibrary.analysis.peak_finder import find_peak_near_events
-from PhysicsLibrary.file_parser import load_dataset, load_dataset_file
-from PhysicsLibrary.file_parser_generic import load_any_file
-from PhysicsLibrary.field_study_validation import run_validation_pipeline
-from PhysicsLibrary.loaders.oxysoft_loader import load_oxysoft, load_oxysoft_file
-from PhysicsLibrary.progress import Plan, coerce, track
-from PhysicsLibrary.text_field_study import run_field_study_pipeline
+from PyATCLI.sources import processing_TDT as P
+from PyATCLI.analysis.event_peth import compute_event_zscore_peth
+from PyATCLI.analysis.peak_finder import find_peak_near_events
+from PyATCLI.sources.load import load_dataset, load_dataset_file
+from PyATCLI.sources.tables import load_any_file
+from PyATCLI.fieldstudy.validation import run_validation_pipeline
+from PyATCLI.sources.load import load_oxysoft, load_oxysoft_file
+from PyATCLI.progress import Plan, coerce, track
+from PyATCLI.fieldstudy.study import run_field_study_pipeline
 
 
 class Recorder:
@@ -324,8 +324,8 @@ class TestTDTPipeline(ProgressAssertions):
         read_block, _, _ = _fake_tdt(n_epocs=2)
         rec = Recorder()
         with mock.patch.object(tdt, "read_block", read_block), \
-                mock.patch("PhysicsLibrary.loaders.tdt_loader.processing_TDT.validate_tdt_folder", return_value=(True, "ok")):
-            ds = load_dataset("ignored", fmt=__import__("PhysicsLibrary").DataFormat.TDT, progress=rec)
+                mock.patch("PyATCLI.sources.load.processing_TDT.validate_tdt_folder", return_value=(True, "ok")):
+            ds = load_dataset("ignored", fmt=__import__("PyATCLI").DataFormat.TDT, progress=rec)
         self.assertEqual(ds.source_format, "TDT")
         self.assert_sane(rec)
 

@@ -13,10 +13,10 @@ from numpy.testing import assert_allclose, assert_array_equal
 
 import tdt
 
-import PhysicsLibrary as pl
-from PhysicsLibrary import processing_TDT as P
-from PhysicsLibrary.analysis import group
-from PhysicsLibrary.splice import MODE_CUT_OUT, MODE_KEEP_INSIDE, replay_splices, splice_cut_out, splice_keep_inside
+import PyATCLI as pl
+from PyATCLI.sources import processing_TDT as P
+from PyATCLI.analysis import group
+from PyATCLI.splice import MODE_CUT_OUT, MODE_KEEP_INSIDE, replay_splices, splice_cut_out, splice_keep_inside
 
 
 def _marker(t, store="L1P", phase="high"):

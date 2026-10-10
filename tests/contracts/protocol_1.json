@@ -1,0 +1,1676 @@
+{
+  "protocol": 1,
+  "operations": {
+    "run": {
+      "summary": "run one analysis on a recording; writes CSV tables and a provenance record when told where",
+      "parameters": [
+        {
+          "name": "kind",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "recording",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "parameters",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "load",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "store_labels",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "out",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "output_folder",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "tables",
+          "required": false,
+          "default": "shapes"
+        },
+        {
+          "name": "stem",
+          "required": false,
+          "default": null
+        }
+      ],
+      "result": [
+        "kind",
+        "recording",
+        "parameters",
+        "summary",
+        "notes",
+        "tables",
+        "files",
+        "directory"
+      ]
+    },
+    "reproduce": {
+      "summary": "run an analysis again from its provenance record and check the numbers against exports",
+      "parameters": [
+        {
+          "name": "record",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "recording",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "out",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "compare",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "tolerance",
+          "required": false,
+          "default": 0.0001
+        },
+        {
+          "name": "strict",
+          "required": false,
+          "default": false
+        },
+        {
+          "name": "rounded",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "tables",
+          "required": false,
+          "default": "shapes"
+        }
+      ],
+      "result": []
+    },
+    "batch": {
+      "summary": "run many analyses over many recordings (a folder of TDT blocks counts as many)",
+      "parameters": [
+        {
+          "name": "jobs",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "out",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "output_folder",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "load",
+          "required": false,
+          "default": null
+        }
+      ],
+      "result": []
+    },
+    "compute.event_peth": {
+      "summary": "z-score and align every occurrence of an event into a trial x time matrix (the Event PETH window's data)",
+      "parameters": [
+        {
+          "name": "recording",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "event_times",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "pre",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "post",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "num_bins",
+          "required": false,
+          "default": 300
+        },
+        {
+          "name": "load",
+          "required": false,
+          "default": null
+        }
+      ],
+      "result": [
+        "signal",
+        "label",
+        "result"
+      ]
+    },
+    "compute.peaks": {
+      "summary": "Peak Finder: significant peaks of the whole recording (scope whole), or the peak nearest each event (scope events)",
+      "parameters": [
+        {
+          "name": "recording",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "scope",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "z_threshold",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "include_troughs",
+          "required": false,
+          "default": false
+        },
+        {
+          "name": "min_distance_s",
+          "required": false,
+          "default": 1.0
+        },
+        {
+          "name": "events",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "pre",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "post",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "load",
+          "required": false,
+          "default": null
+        }
+      ],
+      "result": [
+        "signal",
+        "label"
+      ]
+    },
+    "fieldstudy.fields": {
+      "summary": "the field names found in the first participant file of a study folder",
+      "parameters": [
+        {
+          "name": "folder",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "file_glob",
+          "required": false,
+          "default": "P-*.json"
+        }
+      ],
+      "result": [
+        "folder",
+        "fields"
+      ]
+    },
+    "fieldstudy.run": {
+      "summary": "run a text field study: one row per participant, with the similarity of each pair of fields and its tests",
+      "parameters": [
+        {
+          "name": "folder",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "text_fields",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "paired_fields",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "delta_pair",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "file_glob",
+          "required": false,
+          "default": "P-*.json"
+        },
+        {
+          "name": "min_words",
+          "required": false,
+          "default": 5
+        },
+        {
+          "name": "tables",
+          "required": false,
+          "default": "shapes"
+        }
+      ],
+      "result": [
+        "folder",
+        "rows",
+        "tables"
+      ]
+    },
+    "fieldstudy.validate": {
+      "summary": "statistical validation of a study's field pairs: one row per pair",
+      "parameters": [
+        {
+          "name": "folder",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "text_fields",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "paired_fields",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "file_glob",
+          "required": false,
+          "default": "P-*.json"
+        },
+        {
+          "name": "tables",
+          "required": false,
+          "default": "shapes"
+        }
+      ],
+      "result": [
+        "folder",
+        "rows",
+        "tables"
+      ]
+    },
+    "files.inspect": {
+      "summary": "what a path is: a TDT block, a folder with TDT blocks under it (searched at any depth), an Oxysoft export or a table file",
+      "parameters": [
+        {
+          "name": "path",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "search",
+          "required": false,
+          "default": true
+        }
+      ],
+      "result": [
+        "path",
+        "kind",
+        "valid",
+        "message",
+        "recordings"
+      ]
+    },
+    "pt2.load": {
+      "summary": "read a Terranova Prospa .pt2 image: its pixels as an .npy file to map",
+      "parameters": [
+        {
+          "name": "path",
+          "required": true,
+          "default": null
+        }
+      ],
+      "result": [
+        "path",
+        "shape",
+        "image"
+      ]
+    },
+    "group.run": {
+      "summary": "run a group analysis from its analysis_settings.json (or a settings dict; write_settings saves that dict, with the scans it was set up from, as analysis_settings.json in the results folder first)",
+      "parameters": [
+        {
+          "name": "settings",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "out",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "output_folder",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "tables",
+          "required": false,
+          "default": "shapes"
+        },
+        {
+          "name": "scans",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "write_settings",
+          "required": false,
+          "default": false
+        }
+      ],
+      "result": [
+        "name",
+        "tables",
+        "table_names",
+        "notes",
+        "note_records",
+        "software",
+        "spec",
+        "table_data",
+        "files",
+        "directory"
+      ]
+    },
+    "group.scan": {
+      "summary": "what each recording of a group holds: its markers, length and saved splices (no signal processing)",
+      "parameters": [
+        {
+          "name": "folders",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "base_path",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "store_labels",
+          "required": false,
+          "default": null
+        }
+      ],
+      "result": [
+        "base",
+        "scans"
+      ]
+    },
+    "group.setup": {
+      "summary": "set up a group analysis as the wizard does: find the recordings, list their markers, check the design, write the settings",
+      "parameters": [
+        {
+          "name": "folders",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "name",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "markers",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "exclude",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "store_labels",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "pre",
+          "required": false,
+          "default": 10.0
+        },
+        {
+          "name": "post",
+          "required": false,
+          "default": 10.0
+        },
+        {
+          "name": "baseline",
+          "required": false,
+          "default": [
+            -10.0,
+            -6.0
+          ]
+        },
+        {
+          "name": "response",
+          "required": false,
+          "default": [
+            0.0,
+            10.0
+          ]
+        },
+        {
+          "name": "signal",
+          "required": false,
+          "default": "dff"
+        },
+        {
+          "name": "smooth",
+          "required": false,
+          "default": 0.5
+        },
+        {
+          "name": "measures",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "peak_direction",
+          "required": false,
+          "default": "absolute"
+        },
+        {
+          "name": "decay_fraction",
+          "required": false,
+          "default": 0.5
+        },
+        {
+          "name": "correction",
+          "required": false,
+          "default": "holm"
+        },
+        {
+          "name": "alpha",
+          "required": false,
+          "default": 0.05
+        },
+        {
+          "name": "regression",
+          "required": false,
+          "default": "ols"
+        },
+        {
+          "name": "out",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "output_folder",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "run",
+          "required": false,
+          "default": false
+        }
+      ],
+      "result": []
+    },
+    "provenance.write": {
+      "summary": "write the provenance record beside an export (<export>.provenance.json); returns where",
+      "parameters": [
+        {
+          "name": "export",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "kind",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "parameters",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "notes",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "recording",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "source_path",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "extra_outputs",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "store_labels",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "regression_method",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "load",
+          "required": false,
+          "default": null
+        }
+      ],
+      "result": [
+        "record"
+      ]
+    },
+    "recording.open": {
+      "summary": "open a recording and keep it: its id, its structure as JSON and its arrays as .npy files to map (fresh: read the disk again)",
+      "parameters": [
+        {
+          "name": "path",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "load",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "fresh",
+          "required": false,
+          "default": false
+        }
+      ],
+      "result": [
+        "id",
+        "path",
+        "cache",
+        "directory",
+        "original_cache",
+        "splices",
+        "signal_labels",
+        "restored",
+        "warnings",
+        "regression_method"
+      ]
+    },
+    "recording.view": {
+      "summary": "the open recording with a list of splices applied (computed once per list, then remembered); markers on the recording as recorded come back moved through them",
+      "parameters": [
+        {
+          "name": "id",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "splices",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "markers",
+          "required": false,
+          "default": null
+        }
+      ],
+      "result": [
+        "id",
+        "path",
+        "cache",
+        "directory",
+        "splices",
+        "warnings"
+      ]
+    },
+    "recording.splice": {
+      "summary": "stack a splice on a list of splices; markers (on the timeline before it) come back moved through it",
+      "parameters": [
+        {
+          "name": "id",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "mode",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "start",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "end",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "splices",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "markers",
+          "required": false,
+          "default": null
+        }
+      ],
+      "result": [
+        "id",
+        "path",
+        "cache",
+        "directory",
+        "splices",
+        "warnings"
+      ]
+    },
+    "recording.labels": {
+      "summary": "the names the open recording's signals are given ({signal key: name})",
+      "parameters": [
+        {
+          "name": "id",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "signal_labels",
+          "required": true,
+          "default": null
+        }
+      ],
+      "result": []
+    },
+    "recording.close": {
+      "summary": "let go of an open recording",
+      "parameters": [
+        {
+          "name": "id",
+          "required": true,
+          "default": null
+        }
+      ],
+      "result": [
+        "id",
+        "open"
+      ]
+    },
+    "recording.list": {
+      "summary": "the recordings the engine has open",
+      "parameters": [],
+      "result": [
+        "open"
+      ]
+    },
+    "file.tables": {
+      "summary": "the tables of a generic file (Excel, CSV, TSV, text): their names, columns, sizes and first rows",
+      "parameters": [
+        {
+          "name": "path",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "preview",
+          "required": false,
+          "default": 8
+        }
+      ],
+      "result": [
+        "path",
+        "tables"
+      ]
+    },
+    "results.open": {
+      "summary": "what a results folder (a group analysis's, or one holding records or tables), a provenance record or a table file holds: its kind, parameters, tables, notes and the files they were read from",
+      "parameters": [
+        {
+          "name": "path",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "tables",
+          "required": false,
+          "default": "shapes"
+        }
+      ],
+      "result": [
+        "path",
+        "directory",
+        "kind",
+        "parameters",
+        "tables",
+        "notes",
+        "software",
+        "files"
+      ]
+    },
+    "saved.show": {
+      "summary": "list what is saved for a recording",
+      "parameters": [
+        {
+          "name": "recording",
+          "required": true,
+          "default": null
+        }
+      ],
+      "result": []
+    },
+    "saved.marker": {
+      "summary": "Add Marker + Save Changes: put a marker at a time (seconds, on the time axis as the recording now stands)",
+      "parameters": [
+        {
+          "name": "recording",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "time",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "label",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "color",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "fontsize",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "load",
+          "required": false,
+          "default": null
+        }
+      ],
+      "result": []
+    },
+    "saved.unmark": {
+      "summary": "delete the saved markers near a time",
+      "parameters": [
+        {
+          "name": "recording",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "time",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "tolerance",
+          "required": false,
+          "default": 0.05
+        },
+        {
+          "name": "label",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "load",
+          "required": false,
+          "default": null
+        }
+      ],
+      "result": []
+    },
+    "saved.splice": {
+      "summary": "Splice + Save Changes: stack a splice on the saved ones (it is replayed whenever the recording opens)",
+      "parameters": [
+        {
+          "name": "recording",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "mode",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "start",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "end",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "load",
+          "required": false,
+          "default": null
+        }
+      ],
+      "result": []
+    },
+    "saved.unsplice": {
+      "summary": "take one saved splice out of the stack",
+      "parameters": [
+        {
+          "name": "recording",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "number",
+          "required": true,
+          "default": null
+        }
+      ],
+      "result": []
+    },
+    "saved.rename": {
+      "summary": "give signals names of your own, kept with the recording",
+      "parameters": [
+        {
+          "name": "recording",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "names",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "load",
+          "required": false,
+          "default": null
+        }
+      ],
+      "result": []
+    },
+    "saved.highlight": {
+      "summary": "Highlighter + Save Changes: shade a stretch of the recording",
+      "parameters": [
+        {
+          "name": "recording",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "start",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "end",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "color",
+          "required": false,
+          "default": "Yellow"
+        }
+      ],
+      "result": []
+    },
+    "saved.text": {
+      "summary": "Text tool + Save Changes: put a text box on the plot",
+      "parameters": [
+        {
+          "name": "recording",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "x",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "y",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "text",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "fontsize",
+          "required": false,
+          "default": 10
+        }
+      ],
+      "result": []
+    },
+    "saved.clear": {
+      "summary": "Undo All Changes, saved: delete every file in the recording's JSON saves folder (yes=True to go ahead)",
+      "parameters": [
+        {
+          "name": "recording",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "yes",
+          "required": false,
+          "default": false
+        }
+      ],
+      "result": [
+        "removed"
+      ]
+    },
+    "saved.write": {
+      "summary": "Save Changes: write whole lists — markers, splices, signal names, highlights, text boxes — replacing what was saved",
+      "parameters": [
+        {
+          "name": "recording",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "markers",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "splices",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "signal_labels",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "highlights",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "text_annotations",
+          "required": false,
+          "default": null
+        }
+      ],
+      "result": [
+        "files"
+      ]
+    },
+    "info": {
+      "summary": "versions of this library, Python and the numerical packages — what a result would be stamped with",
+      "parameters": [],
+      "result": [
+        "python",
+        "implementation",
+        "bits",
+        "platform",
+        "frozen",
+        "library",
+        "packages",
+        "app",
+        "protocol"
+      ]
+    },
+    "kinds": {
+      "summary": "the analyses and every parameter of each",
+      "parameters": [
+        {
+          "name": "kind",
+          "required": false,
+          "default": null
+        }
+      ],
+      "result": [
+        "analyses"
+      ]
+    },
+    "operations": {
+      "summary": "every operation the engine can be asked for, with its parameters",
+      "parameters": [],
+      "result": [
+        "protocol",
+        "operations"
+      ]
+    }
+  },
+  "analyses": {
+    "zscore_window": {
+      "summary": "z-score a window around one time against its own pre-event baseline",
+      "parameters": [
+        {
+          "name": "center_s",
+          "type": "float",
+          "required": true,
+          "default": null,
+          "choices": []
+        },
+        {
+          "name": "pre_s",
+          "type": "float",
+          "required": false,
+          "default": 15.0,
+          "choices": []
+        },
+        {
+          "name": "post_s",
+          "type": "float",
+          "required": false,
+          "default": 15.0,
+          "choices": []
+        },
+        {
+          "name": "signal",
+          "type": "str",
+          "required": false,
+          "default": "normalized",
+          "choices": []
+        }
+      ],
+      "tables": {
+        "window": [
+          "Channel",
+          "time_from_center_s",
+          "z_score"
+        ],
+        "peaks": [
+          "Channel",
+          "Peak Z-score",
+          "Peak time from center (s)"
+        ]
+      }
+    },
+    "auc_window": {
+      "summary": "area under the curve in a window, split by sign",
+      "parameters": [
+        {
+          "name": "center_s",
+          "type": "float",
+          "required": true,
+          "default": null,
+          "choices": []
+        },
+        {
+          "name": "pre_s",
+          "type": "float",
+          "required": false,
+          "default": 15.0,
+          "choices": []
+        },
+        {
+          "name": "post_s",
+          "type": "float",
+          "required": false,
+          "default": 15.0,
+          "choices": []
+        },
+        {
+          "name": "signal",
+          "type": "str",
+          "required": false,
+          "default": "normalized",
+          "choices": []
+        }
+      ],
+      "tables": {
+        "auc": [
+          "Channel",
+          "Total AUC",
+          "Positive AUC",
+          "Negative AUC",
+          "Window Pre (s)",
+          "Window Post (s)"
+        ],
+        "window": [
+          "Channel",
+          "time_from_center_s",
+          "value"
+        ]
+      }
+    },
+    "fft_window": {
+      "summary": "power spectrum of a window (mean and linear trend removed) and its top peaks",
+      "parameters": [
+        {
+          "name": "center_s",
+          "type": "float",
+          "required": true,
+          "default": null,
+          "choices": []
+        },
+        {
+          "name": "pre_s",
+          "type": "float",
+          "required": false,
+          "default": 15.0,
+          "choices": []
+        },
+        {
+          "name": "post_s",
+          "type": "float",
+          "required": false,
+          "default": 15.0,
+          "choices": []
+        },
+        {
+          "name": "signal",
+          "type": "str",
+          "required": false,
+          "default": "normalized",
+          "choices": []
+        }
+      ],
+      "tables": {
+        "peaks": [
+          "Channel",
+          "Peak Rank",
+          "Frequency (Hz)",
+          "BPM",
+          "Power"
+        ],
+        "spectrum": [
+          "Channel",
+          "frequency_hz",
+          "power"
+        ]
+      }
+    },
+    "curve_fit": {
+      "summary": "fit a model to the stretch of the signal between two times",
+      "parameters": [
+        {
+          "name": "t1_s",
+          "type": "float",
+          "required": true,
+          "default": null,
+          "choices": []
+        },
+        {
+          "name": "t2_s",
+          "type": "float",
+          "required": true,
+          "default": null,
+          "choices": []
+        },
+        {
+          "name": "model",
+          "type": "str",
+          "required": false,
+          "default": "linear",
+          "choices": []
+        },
+        {
+          "name": "signal",
+          "type": "str",
+          "required": false,
+          "default": "normalized",
+          "choices": []
+        },
+        {
+          "name": "window_s",
+          "type": "float",
+          "required": false,
+          "default": 30.0,
+          "choices": []
+        }
+      ],
+      "tables": {
+        "fit": [
+          "Channel",
+          "Model",
+          "Parameter",
+          "Value",
+          "R2",
+          "t1 (s)",
+          "t2 (s)",
+          "dt (s)"
+        ],
+        "curve": [
+          "Channel",
+          "Model",
+          "time_s",
+          "value",
+          "fit"
+        ],
+        "context": [
+          "Channel",
+          "time_s",
+          "value"
+        ]
+      }
+    },
+    "event_peth": {
+      "summary": "align every occurrence of one event: trials, mean/SEM, AUC, peak and time bins per trial and for the group",
+      "parameters": [
+        {
+          "name": "event",
+          "type": "str",
+          "required": true,
+          "default": null,
+          "choices": []
+        },
+        {
+          "name": "pre_s",
+          "type": "float",
+          "required": false,
+          "default": 15.0,
+          "choices": []
+        },
+        {
+          "name": "post_s",
+          "type": "float",
+          "required": false,
+          "default": 15.0,
+          "choices": []
+        },
+        {
+          "name": "bin_s",
+          "type": "float",
+          "required": false,
+          "default": 1.0,
+          "choices": []
+        },
+        {
+          "name": "selected_trials",
+          "type": "ints",
+          "required": false,
+          "default": null,
+          "choices": []
+        },
+        {
+          "name": "event_times",
+          "type": "floats",
+          "required": false,
+          "default": null,
+          "choices": []
+        }
+      ],
+      "tables": {
+        "zscore": [
+          "time_from_event_s",
+          "z_score"
+        ],
+        "mean_sem": [
+          "time_from_event_s",
+          "mean",
+          "sem"
+        ],
+        "trials": [
+          "Trial",
+          "Trial Event Time (s)",
+          "time_from_event_s",
+          "z_score"
+        ],
+        "auc": [
+          "Trial",
+          "Trial Event Time (s)",
+          "Total AUC",
+          "Positive AUC",
+          "Negative AUC",
+          "Checked"
+        ],
+        "peak": [
+          "Trial",
+          "Trial Event Time (s)",
+          "Peak Amplitude",
+          "Time-to-Peak (s)",
+          "Checked"
+        ],
+        "bins": [
+          "Trial",
+          "Trial Event Time (s)",
+          "Checked"
+        ]
+      }
+    },
+    "peak_finder": {
+      "summary": "statistically significant peaks: across the whole recording, or near events",
+      "parameters": [
+        {
+          "name": "scope",
+          "type": "choice",
+          "required": false,
+          "default": "whole",
+          "choices": [
+            "whole",
+            "one_event",
+            "all_same_name",
+            "scan_all"
+          ]
+        },
+        {
+          "name": "z_threshold",
+          "type": "float",
+          "required": false,
+          "default": 5.0,
+          "choices": []
+        },
+        {
+          "name": "min_distance_s",
+          "type": "float",
+          "required": false,
+          "default": 1.0,
+          "choices": []
+        },
+        {
+          "name": "include_troughs",
+          "type": "bool",
+          "required": false,
+          "default": false,
+          "choices": []
+        },
+        {
+          "name": "event",
+          "type": "str",
+          "required": false,
+          "default": null,
+          "choices": []
+        },
+        {
+          "name": "event_time",
+          "type": "float",
+          "required": false,
+          "default": null,
+          "choices": []
+        },
+        {
+          "name": "event_times",
+          "type": "floats",
+          "required": false,
+          "default": null,
+          "choices": []
+        },
+        {
+          "name": "event_groups",
+          "type": "groups",
+          "required": false,
+          "default": null,
+          "choices": []
+        },
+        {
+          "name": "pre_s",
+          "type": "float",
+          "required": false,
+          "default": 15.0,
+          "choices": []
+        },
+        {
+          "name": "post_s",
+          "type": "float",
+          "required": false,
+          "default": 15.0,
+          "choices": []
+        }
+      ],
+      "tables": {
+        "peaks": [
+          "time_s",
+          "z_score",
+          "kind"
+        ],
+        "alignment": [
+          "Event Time (s)",
+          "Found",
+          "Latency (s)",
+          "Z-score"
+        ],
+        "scan": [
+          "Event",
+          "Occurrences",
+          "Found",
+          "Hit Rate",
+          "Avg Z (found only)"
+        ]
+      }
+    },
+    "event_intervals": {
+      "summary": "the time between markers: since the previous of the same store, and of any",
+      "parameters": [
+        {
+          "name": "markers",
+          "type": "markers",
+          "required": false,
+          "default": null,
+          "choices": []
+        }
+      ],
+      "tables": {
+        "intervals": [
+          "time_s",
+          "store",
+          "label",
+          "phase",
+          "dt_since_prev_same_store_s",
+          "dt_since_prev_any_s"
+        ]
+      }
+    },
+    "process": {
+      "summary": "the processed traces themselves: dF/F and the raw per-wavelength channels",
+      "parameters": [
+        {
+          "name": "signals",
+          "type": "str",
+          "required": false,
+          "default": null,
+          "choices": []
+        }
+      ],
+      "tables": {
+        "trace": [
+          "time_s"
+        ]
+      }
+    }
+  },
+  "outputs": {
+    "group_analysis": {
+      "summary": "a group analysis's results folder: every table as a CSV beside the settings it was run from, a report and its notes",
+      "tables": {
+        "trials": [
+          "subject",
+          "marker",
+          "trial",
+          "event_time",
+          "valid",
+          "auc",
+          "peak",
+          "mean",
+          "latency",
+          "decay"
+        ],
+        "subject_means": [
+          "subject",
+          "marker",
+          "measure",
+          "n",
+          "mean"
+        ],
+        "descriptives": [
+          "measure",
+          "marker",
+          "n_subjects",
+          "n_trials",
+          "mean_of_subject_means",
+          "sd_of_subject_means",
+          "sem",
+          "ci_low",
+          "ci_high"
+        ],
+        "models": [
+          "measure",
+          "basis",
+          "status",
+          "formula",
+          "n_observations",
+          "n_subjects",
+          "converged"
+        ],
+        "fixed_effects": [
+          "measure",
+          "basis",
+          "term",
+          "estimate",
+          "se",
+          "ci_low",
+          "ci_high"
+        ],
+        "omnibus": [
+          "measure",
+          "basis",
+          "test"
+        ],
+        "variance": [
+          "measure",
+          "basis",
+          "component",
+          "variance"
+        ],
+        "estimated_means": [
+          "measure",
+          "basis",
+          "marker",
+          "mean",
+          "se",
+          "ci_low",
+          "ci_high"
+        ],
+        "pairwise": [
+          "measure",
+          "basis",
+          "marker_a",
+          "marker_b",
+          "difference",
+          "se",
+          "p_adjusted",
+          "significant"
+        ],
+        "diagnostics": [
+          "subject",
+          "marker",
+          "measure",
+          "observed",
+          "fitted",
+          "resid"
+        ],
+        "random_effects": [
+          "measure",
+          "basis",
+          "subject",
+          "effect"
+        ],
+        "mean_traces": [
+          "marker",
+          "subject",
+          "n_trials",
+          "time",
+          "value"
+        ]
+      },
+      "files": {
+        "trials": "trials_long.csv",
+        "subject_means": "subject_means.csv",
+        "descriptives": "descriptives.csv",
+        "models": "models.csv",
+        "fixed_effects": "model_fixed_effects.csv",
+        "omnibus": "model_omnibus_tests.csv",
+        "variance": "model_variance_components.csv",
+        "estimated_means": "estimated_means.csv",
+        "pairwise": "posthoc_pairwise_comparisons.csv",
+        "diagnostics": "model_residuals.csv",
+        "random_effects": "model_random_effects.csv",
+        "mean_traces": "mean_traces.csv",
+        "settings": "analysis_settings.json",
+        "report": "analysis_report.txt",
+        "notes": "analysis_notes.json"
+      }
+    },
+    "view": {
+      "summary": "an Export View's numbers: every sample in view, and the markers in view",
+      "tables": {
+        "data": [],
+        "markers": [
+          "label",
+          "color"
+        ]
+      },
+      "files": {}
+    }
+  },
+  "recording_cache": {
+    "always": [
+      "x",
+      "fs",
+      "source",
+      "source_path",
+      "store",
+      "markers"
+    ],
+    "TDT": [
+      "signals",
+      "corr",
+      "raw",
+      "detected_markers",
+      "motion_correction_inlier_fraction"
+    ],
+    "Oxysoft": [
+      "o2hb",
+      "hhb",
+      "detected_markers"
+    ],
+    "Generic": [
+      "x_label",
+      "y_columns"
+    ]
+  }
+}

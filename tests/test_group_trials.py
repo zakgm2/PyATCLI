@@ -5,8 +5,8 @@ import unittest
 import numpy as np
 from numpy.testing import assert_allclose
 
-from PhysicsLibrary.analysis import group_trials as gt
-from PhysicsLibrary.analysis.group import GroupSpec
+from PyATCLI.analysis.group import trials as gt
+from PyATCLI.analysis.group import GroupSpec
 
 
 def spec(**kw):

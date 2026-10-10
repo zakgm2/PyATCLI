@@ -1,5 +1,5 @@
 """
-Automated tests for PhysicsLibrary's computational core.
+Automated tests for PyATCLI's computational core.
 
 Run them from the repository root (after `pip install -e .` or `pip install .`):
 
@@ -17,3 +17,9 @@ docstring explaining it); they keep the suite green today and will start
 reporting "unexpected success" once the defect is fixed, at which point the
 decorator should simply be removed.
 """
+
+import os
+
+# An operation says which keys of its result are always there (ops: result=[...]; ENGINE_CONTRACT.json lists them). Every operation any test runs is
+# checked against that: a key that goes missing fails the test that ran it, not a window months later.
+os.environ["PYATCLI_CHECK_RESULTS"] = "1"
