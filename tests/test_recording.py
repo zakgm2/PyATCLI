@@ -564,6 +564,16 @@ class TestFindTdtRecordings(TempDirCase):
     def test_nothing_found_is_an_empty_list(self):
         self.assertEqual(pl.find_tdt_recordings(self.tmp), [])
 
+    @staticmethod
+    def remove_link(link):
+        """Takes away a symlink (POSIX: os.rmdir refuses one) or an NTFS junction (os.unlink refuses one), never what it points at."""
+        if not os.path.lexists(link):
+            return
+        try:
+            os.unlink(link)
+        except OSError:
+            os.rmdir(link)
+
     def test_a_folder_that_links_back_to_an_ancestor_does_not_loop(self):
         block = make_tdt_folder(os.path.join(self.tmp, "a"), "Rat1")
         link = os.path.join(self.tmp, "a", "loop")
@@ -578,7 +588,7 @@ class TestFindTdtRecordings(TempDirCase):
             if not os.path.isdir(link):
                 self.skipTest("could not create a junction either")
         # Removed before the temp folder is, so cleaning up can never follow it back into the tree.
-        self.addCleanup(lambda: os.path.isdir(link) and os.rmdir(link))
+        self.addCleanup(self.remove_link, link)
         self.assertEqual(pl.find_tdt_recordings(self.tmp), [block])
 
 
