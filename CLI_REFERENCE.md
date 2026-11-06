@@ -1,6 +1,6 @@
 # PyATCLI command line
 
-`python -m PyATCLI` (or `pyatcli`) — version 2026.11.2.
+`python -m PyATCLI` (or `pyatcli`) — version 2026.11.5.
 
 This page is generated from the program (`python -m PyATCLI docs --format markdown`); the same text is in `--help`.
 

@@ -4,15 +4,18 @@ library wrote, found from a folder, a provenance record or a table. Nothing here
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
+import warnings
 
+import numpy as np
 import pandas as pd
 
 import PyATCLI as pl
 from PyATCLI import ops
 from PyATCLI.analysis.group.report import NOTES_FILENAME, REPORT_FILENAME, TABLE_FILES
 from PyATCLI.analysis.group.run import GROUP_SETTINGS_FILENAME, run_group_analysis, write_group_settings
-from PyATCLI.results import NoResults, open_results
+from PyATCLI.results import NoResults, _read_tables, open_results
 
 from tests.test_cli import CliCase
 from tests.test_group_run import TempDirCase, simulated_loader, simulated_spec
@@ -152,6 +155,22 @@ class TestTheOperation(TempDirCase):
                 "sys.exit(1 if loaded else 0)\n")
         done = subprocess.run([sys.executable, "-W", "ignore", "-c", code, self.folder], capture_output=True, text=True, timeout=120)
         self.assertEqual(done.returncode, 0, f"it imported a plotting library: {done.stdout} {done.stderr[-400:]}")
+
+
+class TestNumbersComeBackAsWritten(unittest.TestCase):
+    def test_a_table_file_reads_back_exactly_and_without_a_pandas_warning(self):
+        """Exact on every pandas (the default converter before 3.1 is not, so the argument is passed there) and silent on 3.1 and later
+        (which deprecated the argument, so it is not passed there)."""
+        rng = np.random.default_rng(1)
+        values = np.concatenate([rng.normal(size=20000), rng.normal(size=20000) * 10.0 ** rng.integers(-12, 12, size=20000)])
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "numbers.csv")
+            pd.DataFrame({"a": values}).to_csv(path, index=False)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                tables = _read_tables([path])
+        np.testing.assert_array_equal(tables["numbers"]["a"].to_numpy(), values)
+        self.assertEqual([str(w.message) for w in caught if "float_precision" in str(w.message)], [])
 
 
 if __name__ == "__main__":

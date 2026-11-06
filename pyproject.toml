@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "PyATCLI"
-version = "2026.11.2"
+version = "2026.11.5"
 description = "The analysis library, engine and command line behind PyAT: TDT fibre photometry, Oxysoft NIRS, Terranova EFNMR and text-field studies, with provenance records (formerly PhysicsLibrary)"
 requires-python = ">=3.10"
 readme = "README.md"

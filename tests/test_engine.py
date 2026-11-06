@@ -25,6 +25,7 @@ from PyATCLI.engine.server import serve
 from PyATCLI.engine.session import Session
 from PyATCLI.ops import OpError
 from PyATCLI.progress import Cancelled
+from PyATCLI.results import EXACT_FLOATS
 
 from tests.test_cli import CliCase, make_tdt_folder
 
@@ -230,7 +231,7 @@ class TestAnalysesOnAnOpenRecording(SessionCase):
         result = self.call("run", {"kind": "zscore_window", "recording": {"id": wired["id"]}, "parameters": self.PARAMS, "tables": "files"})
         path = result["tables"]["window"]["path"]
         self.assertTrue(path.startswith(self.session.data_dir))
-        table = pd.read_csv(path, float_precision="round_trip")
+        table = pd.read_csv(path, **EXACT_FLOATS)
         direct = pl.run_analysis("zscore_window", pl.load_recording(self.oxy)["cache"], self.PARAMS).tables["window"]
         pd.testing.assert_frame_equal(table, direct, check_dtype=False)
 

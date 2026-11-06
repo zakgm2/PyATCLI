@@ -1,5 +1,7 @@
 # PyATCLI
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23994241.svg)](https://doi.org/10.5281/zenodo.23994241)
+
 The analysis library, engine and command line behind [PyAT (Python Analysis Tool)](https://github.com/zakgm2/PyAT) — file parsing, signal processing, curve fitting, group statistics, saved state and provenance records, with no GUI and no plotting code of its own: it computes and writes numbers, and PyAT draws them. Any interface (a script, a notebook, `python -m PyATCLI`) can sit on top of it.
 
 > **Coming from PhysicsLibrary?** This is the same project under a new name, from version 2026.10.10 (PyPI: `ZaksPhysicsLibrary` → `PyATCLI`). Change `import PhysicsLibrary` to `import PyATCLI`, `python -m PhysicsLibrary` to `python -m PyATCLI` and the `physicslib` command to `pyatcli`; nothing else about the top-level names changed. [CHANGELOG.md](CHANGELOG.md) has the list, including the modules that moved into folders.

@@ -2,6 +2,16 @@
 
 ---
 
+## Version 2026.11.5 — PyATCLI:
+  **No more pandas deprecation warning when a finished analysis is read back.** pandas 3.1 deprecated the `float_precision` argument of `read_csv` (a `Pandas4Warning`
+  whenever it is given), and `open_results` / the engine's `results.open` passed `float_precision="round_trip"` to read a result's tables. It is now passed only on pandas
+  older than 3.1, where it is still what returns the numbers exactly as they were written (the default converter there gave a different float64 for about a quarter of the random
+  values in a test); pandas 3.1's single converter is exact, so nothing is passed there. Numbers read back are the same on every pandas. `PyATCLI.results.EXACT_FLOATS` holds
+  what to pass, for a program that reads the library's CSVs itself. Tests: 895 (1 new: 40,000 numbers read back bit for bit, with no warning).
+  Citation: `CITATION.cff` carries the Zenodo concept DOI, 10.5281/zenodo.23994241 (version 2026.11.2: 10.5281/zenodo.23994242), and the README its badge.
+
+---
+
 ## Version 2026.11.2 — PyATCLI:
   **The Peak Finder gets a start buffer, and the search for a response near events gets a chance level.** Both come from the benchmarks written for the paper
   (synthetic recordings with known truth; the scripts, the criteria written before each run and every result, failures included, are in the `PyAT-paper` repository, which is not public yet):

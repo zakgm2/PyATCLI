@@ -19,6 +19,7 @@ business (PyAT's windows draw what this reads). The operation `results.open` is 
 """
 
 import os
+import re
 from dataclasses import dataclass, field
 
 import pandas as pd
@@ -26,6 +27,17 @@ import pandas as pd
 from . import provenance
 from .analysis.group.report import TABLE_FILES, read_group_notes
 from .analysis.group.run import GROUP_SETTINGS_FILENAME, read_group_settings
+
+
+def _pandas_before(major, minor):
+    parts = pd.__version__.split(".")
+    return (int(parts[0]), int(re.match(r"\d+", parts[1]).group())) < (major, minor)
+
+
+# What read_csv needs to give float64 numbers back exactly as they were written. Before pandas 3.1 its default converter does not always return the
+# same float64 (about a quarter of random values came back different in a test), so `float_precision="round_trip"` is passed there. pandas 3.1 made
+# its one converter exact and deprecated the argument (a Pandas4Warning whenever it is given), so on 3.1 and later it is left out.
+EXACT_FLOATS = {"float_precision": "round_trip"} if _pandas_before(3, 1) else {}
 
 
 class NoResults(ValueError):
@@ -50,8 +62,8 @@ def _read_tables(paths):
         if p.lower().endswith(".csv"):
             if not os.path.isfile(p):
                 raise NoResults(f"{p} is not there any more")
-            # round_trip: the numbers read back exactly as they were written, so a plot of a file is a plot of the result
-            tables[os.path.splitext(os.path.basename(p))[0]] = pd.read_csv(p, encoding="utf-8-sig", float_precision="round_trip")
+            # exactly as written (EXACT_FLOATS), so a plot of a file is a plot of the result
+            tables[os.path.splitext(os.path.basename(p))[0]] = pd.read_csv(p, encoding="utf-8-sig", **EXACT_FLOATS)
     return tables
 
 
