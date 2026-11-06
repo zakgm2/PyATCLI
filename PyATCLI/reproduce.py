@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 
 from . import provenance
-from .analyses import AnalysisResult, GROUP_KIND, VIEW_KIND, kinds, run_analysis, run_group_from_spec, run_view
+from .analyses import AnalysisResult, GROUP_KIND, VIEW_KIND, fill_legacy, kinds, run_analysis, run_group_from_spec, run_view
 from .sources.load import load_dataset_file
 from .sources.tables import load_any_file
 from .sources.processing_TDT import process_tdt_folder
@@ -234,6 +234,8 @@ def reproduce(record, recording=None, out_dir=None, compare=(), tolerance=DEFAUL
         record = provenance.read_record(os.fspath(record))
     analysis = record.get("analysis") or {}
     kind, params = analysis.get("type", record.get("kind")), dict(analysis.get("parameters") or {})
+    if kind in kinds():                           # a record from before a parameter existed means what the analysis did then
+        params = fill_legacy(kind, params)
     warnings = provenance.check_environment(record)
     if rounded is None:
         rounded = ((record.get("software") or {}).get("app") or {}).get("name") == "PyAT"

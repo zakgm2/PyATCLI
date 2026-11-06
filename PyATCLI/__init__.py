@@ -68,6 +68,7 @@ from .analysis import (
     compute_event_zscore_peth,
     find_significant_peaks,
     find_peak_near_events,
+    shuffle_null_near_events,
     compute_auc_from_trace,
     compute_auc_window,
     compute_auc_matrix,

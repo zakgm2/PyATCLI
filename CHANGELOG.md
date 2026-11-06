@@ -2,6 +2,42 @@
 
 ---
 
+## Version 2026.11.2 — PyATCLI:
+  **The Peak Finder gets a start buffer, and the search for a response near events gets a chance level.** Both come from the benchmarks written for the paper
+  (synthetic recordings with known truth; the scripts, the criteria written before each run and every result, failures included, are in the `PyAT-paper` repository, which is not public yet):
+  on recordings with no transients at all the whole-recording detector found about 22 false five-sigma peaks per hour, nearly all in the first seconds, and the
+  search near events reports a "response" by chance in a share of random windows (about one in ten at z = 5 on a real recording).
+  Changed defaults (two results change for an unchanged call — set the parameter to its old value for the old numbers):
+  - **`find_significant_peaks(..., start_buffer_s=10.0)`, and the `peak_finder` analysis with scope `whole`: no peak is reported in the first 10 seconds.** Only the
+    search skips the start: the mean and standard deviation still come from the whole recording, so no peak's z-score changes with the buffer (cutting the start
+    out instead was tried and made false peaks *more* frequent with motion in the data, because the standard deviation shrinks). On the benchmark's recordings
+    with no transients the false peaks fell from 22 to 0 per hour (new seeds: criteria and numbers in `PyAT-paper/results/b2d_report.md`) at a cost of under
+    0.01 in recall. The 10 s was chosen on synthetic data, and the buffer does not remove false peaks that motion artefacts cause later; `0` searches
+    everything, as before.
+  - **The `peak_finder` analysis near events (scopes `one_event`, `all_same_name`, `scan_all`) runs the shuffle-null by default (`n_shuffles=1000`, `seed=0`):**
+    the `alignment` table gets a `p (shuffle)` column, the `scan` table gets `Chance Hit Rate`, `p (shuffle)` and `p (Holm)` (Holm across the event types
+    scanned), and the summary gets `chance_hit_rate`, `expected_found_by_chance` and `p_shuffle`. `n_shuffles=0` gives the tables as before. About two seconds
+    per 20 events. The engine operation `compute.peaks` keeps `n_shuffles=0` unless asked, so an older client is not slowed.
+  New:
+  - **`shuffle_null_near_events(time_array, signal, event_times, pre, post, z_threshold, include_troughs, n_shuffles, seed, progress)`** (`PyATCLI.analysis.peak_finder`,
+    exported from `PyATCLI`): how often `find_peak_near_events` finds a "response" by chance on the recording itself, and whether the given events do better. The
+    whole train of events is moved together by a random circular shift (their spacing is kept) and every shifted event is searched exactly as a real one is. It
+    returns the chance hit rate, a permutation p-value for the number of events with a response (`p_count`) and one per event (`p_event`); the p-values are
+    conservative when the recording really has responses, never optimistic. Calibration on recordings with no transients (200 per condition, new seeds):
+    `p_count` ≤ 0.05 in 1.0–6.0% of trains, `p_event` ≤ 0.05 for 4.9–5.2% of random events; trains locked to real transients came out significant in 99–100% of
+    recordings against 2–7% for random times (`PyAT-paper/results/b5_report.md`).
+  - `Param.legacy` and `analyses.fill_legacy(kind, parameters)`: what a record made before a parameter existed means by leaving it out. `reproduce_record` fills
+    it, so **a Peak Finder record written before this version replays with `start_buffer_s=0` and `n_shuffles=0`** and gives its own numbers, not today's defaults.
+    (Running an analysis afresh uses today's defaults.)
+  - `compute.peaks` takes `start_buffer_s` (default 10, as above), `n_shuffles` (default 0) and `seed`; with `n_shuffles` the answer carries `null`, one
+    shuffle-null result per event type (plus `p_count_holm`, the train-level p corrected across the types asked about together), and the progress
+    follows the shuffles. The generated `ENGINE_CONTRACT.json`, `CLI_REFERENCE.md` and the man page list the
+    new parameters (additions only: the released protocol 1 still holds).
+  Also `analysis.peak_finder.holm_adjust`, the Holm step-down the scan's `p (Holm)` and that `p_count_holm` both use.
+  Tests: 894 (31 new): the buffer hides only the start and leaves every z alone; the null's chance rate equals the search's rate on noise, a locked train beats it and a
+    noise train does not, the same seed gives the same answer, edge and short-recording cases say why; the analysis tables with and without it; the engine operation;
+    an old record replays with the old values; float32 input; progress.
+
 ## Version 2026.10.10 — PyATCLI:
   **PhysicsLibrary is now PyATCLI.** It is the analysis library, engine and command line behind PyAT, and PyAT 4.0.0 needs it. This is a new PyPI project:
   `ZaksPhysicsLibrary` stays on PyPI at 2026.9.28 and gets no further releases; version numbers stay release dates (this one is 2026.10.10). The two packages have different import names, so they can sit side by side while you move over; there is no alias for the old name.

@@ -232,7 +232,7 @@ isosbestic-vs-signal motion correction uses.
 |`f0`|baseline fluorescence: the 465 channel's photobleaching trend, the denominator of ΔF/F|
 |`fs`|sampling frequency|
 |`store`|signal label|
-|`markers`|behavioral event markers (see [`get_event_markers`](#get_event_markersdata))|
+|`markers`|behavioral event markers (see [`get_event_markers`](#get_event_markersdata---listdict))|
 |`channels`|`[{"key", "label", "y"}, ...]` — raw, un-corrected per-wavelength streams (`main_driver`, plus `isosbestic` if a 415 reference exists)|
 |`motion_correction_inlier_fraction`|fraction (0–1) of samples kept as inliers during motion correction, or `None` if there was no 415 reference stream|
 
@@ -434,7 +434,7 @@ parameters. Returns `{"popt", "y_fit", "r2", "success", "error"}`.
 
 ### Peak detection
 
-#### `find_significant_peaks(time_array, signal, z_threshold=5.0, min_distance_sec=1.0, include_troughs=False) -> list[dict]`
+#### `find_significant_peaks(time_array, signal, z_threshold=5.0, min_distance_sec=1.0, include_troughs=False, start_buffer_s=10.0) -> list[dict]`
 
 Auto-detects statistically significant transients directly from the
 signal — instead of trusting that externally-supplied event markers
@@ -444,6 +444,19 @@ picks local maxima at or above `z_threshold` (default 5, the usual
 five-sigma convention), at least `min_distance_sec` apart.
 `include_troughs` also detects significant negative deflections
 (off by default).
+
+`start_buffer_s` (default 10) is a number of seconds at the start of the
+recording in which no peak is reported. A trace is least settled right after
+the light comes on, and the tail of the bleaching there reads as unusual: on
+synthetic recordings with no transients at all, the false five-sigma peaks of
+the detector sat in the first seconds, and a 10 s buffer removed them. Only
+the search skips the start — the mean and standard deviation still come from
+the whole recording, so no peak's z-score depends on the buffer (a peak within
+`min_distance_sec` of the buffer's end that a taller peak inside it used to
+hide can appear). The buffer does not remove false peaks that motion artefacts
+cause later in the recording. 10 s was chosen on synthetic data; look at the
+first minute of your own recording and set what it needs (`0` searches
+everything). Records written before 2026.11.2 replay with `0`.
 
 **Returns** `[{"time", "z_score", "kind": "peak"|"trough"}, ...]`, sorted
 by time.
@@ -461,12 +474,54 @@ threshold reports a "response" by chance in most windows. On a real
 fibre-photometry recording searched the way PyAT does it (0.5 s-smoothed
 ΔF/F, 5 s baseline, 10 s response window), random pseudo-events were
 reported as having a response 58% of the time at 2.5, 40% at 3, 21% at 4
-and 10% at 5; the exact rates depend on the window lengths.
+and 10% at 5; the exact rates depend on the window lengths. Even at 5,
+"found" is not proof: `shuffle_null_near_events` measures the chance rate on
+the recording itself.
 
 **Returns** one dict per `event_time` (same order):
 `{"event_time", "found", "peak_time", "latency", "z_score", "kind"}` —
 `found` is `False` (with the rest `None`) if the window was unusable or
 nothing cleared `z_threshold`.
+
+#### `shuffle_null_near_events(time_array, signal, event_times, pre, post, z_threshold=5.0, include_troughs=False, n_shuffles=1000, seed=0, progress=None) -> dict`
+
+How often `find_peak_near_events` finds a "response" **by chance** on this
+recording, and whether the given events do better than that.
+
+The whole train of events is moved as one by a random circular shift of the
+part of the recording where a complete window fits (so the spacing between the
+events, and with it how much their windows overlap, is kept), `n_shuffles`
+times, and each shifted event is searched exactly as a real one is
+(the same `pre`/`post`, baseline, `z_threshold` and `include_troughs`). From that:
+
+- `chance_hit_rate`: the share of shifted windows that reached `z_threshold`.
+- `p_count`: how often a shifted train had at least as many events with a
+  response as the real one: `(1 + the shuffles that did) / (1 + n_shuffles)`, over the
+  events whose window is complete. It is a permutation p-value for "these event
+  times are unrelated to the signal".
+- `p_event`: per event, the share of all shifted windows whose largest |z| was at
+  least that event's, in the same `(1 + k) / (1 + n)` form. Not corrected for the
+  number of events or event types looked at (the `peak_finder` analysis adds a Holm
+  column across event types when it scans them all).
+
+The smallest p-value possible is `1 / (1 + n_shuffles)`. `seed` fixes the
+shifts: the same inputs and seed give the same answer. One shuffle of 20 events
+costs about two milliseconds, so the default 1,000 shuffles take a couple of
+seconds. `progress` ticks once per shuffle.
+
+Events whose window is cut by the recording's edge cannot be moved: they stay put
+in every shuffle and take no part in `p_count`; their `p_event` is read against the
+complete shifted windows. If the recording really has responses, some shifted
+windows land on them and count as chance, so `chance_hit_rate` reads higher than it
+would without them and the p-values are conservative — a response is never made to
+look more significant than it is, the more so the denser the events.
+
+**Returns** a dict: `available` (`False` with a `reason` when nothing could be
+shifted: a recording shorter than the window, or no event with a complete window —
+the numbers are then `None`), `n_events`, `n_tested` (events with a complete window),
+`n_shuffles`, `seed`, `found` (events with a response among those tested),
+`expected_by_chance` (the mean of that over the shuffles), `chance_hit_rate`,
+`p_count`, and `p_event` (one per event, `None` where the window holds no samples).
 
 ### Area under the curve
 
@@ -1075,7 +1130,7 @@ dict and fills in the defaults without running anything.
 | `fft_window` | power spectrum of a window and its top peaks | `peaks` |
 | `curve_fit` | fit a model to the stretch between two times | `fit` |
 | `event_peth` | every occurrence of one event aligned to it: trials, mean/SEM, AUC, peak, time bins | `zscore`, `mean_sem`, `trials`, `auc`, `peak`, `bins` |
-| `peak_finder` | statistically significant peaks: whole recording, or near events | `peaks` / `alignment` / `scan` by `scope` |
+| `peak_finder` | statistically significant peaks: whole recording (after a `start_buffer_s`), or near events (with the shuffle-null's p-values, `n_shuffles`) | `peaks` / `alignment` / `scan` by `scope` |
 | `event_intervals` | the time between markers | `intervals` |
 | `process` | the processed traces themselves (dF/F and the raw channels) | `trace` |
 
@@ -1172,6 +1227,11 @@ method, every splice, store renames, signal names — which is not necessarily t
 an event analysis that includes the event times themselves, so the markers no longer
 matter); writes the tables and a new record if `out_dir` is given; and compares any exports
 you name, column for column.
+
+A record stores every parameter of its run, so one that lacks a parameter was written before the analysis had it. The
+replay fills such a parameter with the value that means what the analysis did then (`Param.legacy`: the Peak Finder's
+`start_buffer_s` and `n_shuffles` are `0` for records from before 2026.11.2), not with today's default, so an old
+record still reproduces its own numbers. Running the analysis anew (`run_analysis`, `run`) uses today's defaults.
 
 ### `reproduce_record(record, recording=None, out_dir=None, compare=(), tolerance=1e-4, strict=False, progress=None, rounded=None) -> Reproduction`
 
@@ -1309,7 +1369,7 @@ them with their parameters.
 | `group.setup`, `group.run`, `group.scan` | the Hypothesis Testing wizard's steps; `group.scan` lists what each recording holds (markers, length, saved splices) without processing it |
 | `saved.show`, `.marker`, `.unmark`, `.splice`, `.unsplice`, `.rename`, `.highlight`, `.text`, `.clear`, `.write` | what Save Changes saves (`write` replaces whole lists) |
 | `recording.open`, `.view`, `.splice`, `.labels`, `.close`, `.list` | engine only: recordings held open between requests (below) |
-| `compute.event_peth`, `compute.peaks` | the Event PETH window's trial matrix, and Peak Finder |
+| `compute.event_peth`, `compute.peaks` | the Event PETH window's trial matrix, and Peak Finder (`start_buffer_s`; `n_shuffles` and `seed` add a `null` per event type, with `p_count_holm` across the types, off by default here) |
 | `files.inspect`, `pt2.load` | what a path is (a TDT block, a folder with blocks under it, an Oxysoft export, a table file); a Terranova `.pt2` image as an `.npy` file |
 | `provenance.write` | the provenance record beside an export (`<export>.provenance.json`) |
 | `fieldstudy.fields`, `.run`, `.validate` | the text field study and its statistical validation (they embed text with a language model) |

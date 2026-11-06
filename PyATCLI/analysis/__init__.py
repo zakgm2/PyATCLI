@@ -13,7 +13,7 @@ tool (mirrors physicsanalysis_qt/analysis/'s own layout):
   fft.py          - compute_fft_slice, find_fft_peaks (peak *drawing* is
                     physicsanalysis_qt's own concern, not this library's —
                     see that repo's analysis/fft.py)
-  peak_finder.py  - find_significant_peaks, find_peak_near_events
+  peak_finder.py  - find_significant_peaks, find_peak_near_events, shuffle_null_near_events
   curve_fit.py    - compute_slope_segment, fit_model_to_segment
   intervals.py    - compute_marker_intervals
   group/          - group analysis across recordings (a package):
@@ -58,8 +58,12 @@ from .fft import (
     find_fft_peaks,
 )
 from .peak_finder import (
+    DEFAULT_SHUFFLES,
+    DEFAULT_START_BUFFER_S,
     find_significant_peaks,
     find_peak_near_events,
+    holm_adjust,
+    shuffle_null_near_events,
 )
 from .curve_fit import (
     compute_slope_segment,

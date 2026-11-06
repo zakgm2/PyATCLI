@@ -2,7 +2,9 @@
 ops/compute.py — the building blocks a window draws from, where `run` (analysis.py) gives the tables an export writes.
 
     compute.event_peth   every occurrence of one event aligned into a trial x time matrix of z-scores (the Event PETH window's data)
-    compute.peaks        Peak Finder: significant peaks of the whole recording, or the one nearest each of some events
+    compute.peaks        Peak Finder: significant peaks of the whole recording, or the one nearest each of some events (and, with
+                         n_shuffles, how often a peak turns up near shifted copies of the events by chance: `null` per event type,
+                         with `p_count_holm` across the types)
 
 Both work on the recording's normalized signal (the corrected dF/F for TDT), smoothed, exactly as the app's windows do, and name the
 recording as `run` does ({"id": ...} for one the engine holds, or a path). Arrays come back as .npy files to map (engine/wire.py): a
@@ -13,7 +15,9 @@ import tempfile
 
 from ..analyses import ParameterError
 from ..analysis.event_peth import compute_event_zscore_peth
-from ..analysis.peak_finder import find_peak_near_events, find_significant_peaks
+from ..analysis.peak_finder import (
+    DEFAULT_START_BUFFER_S, find_peak_near_events, find_significant_peaks, holm_adjust, shuffle_null_near_events,
+)
 from ..analysis.shared import smooth_signal
 from ..progress import Plan
 from ..recording import normalized_signal
@@ -61,10 +65,16 @@ def event_peth(ctx, *, recording, event_times, pre, post, num_bins=300, load=Non
 
 
 @operation("compute.peaks", "Peak Finder: significant peaks of the whole recording (scope whole), or the peak nearest each event (scope events)", result=["signal", "label"])
-def peaks(ctx, *, recording, scope, z_threshold, include_troughs=False, min_distance_s=1.0, events=None, pre=None, post=None, load=None):
+def peaks(ctx, *, recording, scope, z_threshold, include_troughs=False, min_distance_s=1.0, events=None, pre=None, post=None,
+          start_buffer_s=DEFAULT_START_BUFFER_S, n_shuffles=0, seed=0, load=None):
     if scope not in ("whole", "events"):
         raise ParameterError(f"scope must be 'whole' or 'events', not {scope!r}")
     z_threshold = float(z_threshold)
+    start_buffer_s, n_shuffles = float(start_buffer_s), int(n_shuffles)
+    if start_buffer_s < 0:
+        raise ParameterError("start_buffer_s cannot be negative")
+    if n_shuffles < 0:
+        raise ParameterError("n_shuffles cannot be negative")
     if scope == "events":
         if not isinstance(events, dict) or not events:
             raise ParameterError("events is {event name: [times]} for scope 'events'")
@@ -75,13 +85,16 @@ def peaks(ctx, *, recording, scope, z_threshold, include_troughs=False, min_dist
     loaded, _ = open_recording(ctx, recording, load)
     cache = loaded["cache"]
     key, label, y = normalized_signal(cache)
-    plan = Plan(ctx.progress(), [("Smoothing the signal", 10), ("Searching for peaks", 90)])
+    stages = [("Smoothing the signal", 10), ("Searching for peaks", 90)]
+    if scope == "events" and n_shuffles:                                  # the shuffles are most of the work: one search per event per shuffle
+        stages = [("Smoothing the signal", 10), ("Searching for peaks", 5), ("Shuffling event times", 85)]
+    plan = Plan(ctx.progress(), stages)
     plan.begin("Smoothing the signal")
     clean = smooth_signal(y, cache["fs"])
     plan.begin("Searching for peaks")
     if scope == "whole":
         found = find_significant_peaks(cache["x"], clean, z_threshold=z_threshold, min_distance_sec=float(min_distance_s),
-                                       include_troughs=bool(include_troughs))
+                                       include_troughs=bool(include_troughs), start_buffer_s=start_buffer_s)
         plan.done()
         return {"signal": key, "label": label, "peaks": found}
     if len(groups) == 1:                                                  # one event type: the progress follows its events
@@ -91,4 +104,18 @@ def peaks(ctx, *, recording, scope, z_threshold, include_troughs=False, min_dist
     else:                                                                 # several: one tick per event type
         results = {name: find_peak_near_events(cache["x"], clean, times, pre, post, z_threshold=z_threshold, include_troughs=bool(include_troughs))
                    for name, times in plan.track("Searching for peaks", groups.items())}
-    return {"signal": key, "label": label, "groups": results}
+    answer = {"signal": key, "label": label, "groups": results}
+    if n_shuffles:                                                        # per event type: p_event, chance_hit_rate, p_count, ... (see shuffle_null_near_events)
+        total = float(sum(max(1, len(times)) for times in groups.values()))
+        done, nulls = 0.0, {}
+        for name, times in groups.items():
+            stage = plan.sub("Shuffling event times")
+            share = max(1, len(times)) / total
+            nulls[name] = shuffle_null_near_events(
+                cache["x"], clean, times, pre, post, z_threshold=z_threshold, include_troughs=bool(include_troughs), n_shuffles=n_shuffles,
+                seed=int(seed), progress=None if stage is None else (lambda f, m="", lo=done, w=share: stage(lo + w * f, m)))
+            done += share
+        for null, adjusted in zip(nulls.values(), holm_adjust([n["p_count"] if n["available"] else None for n in nulls.values()])):
+            null["p_count_holm"] = adjusted                                 # across the event types asked about together
+        answer["null"] = nulls
+    return answer

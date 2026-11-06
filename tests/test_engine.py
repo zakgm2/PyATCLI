@@ -315,10 +315,41 @@ class TestBuildingBlocksForAWindow(SessionCase):
                                               "events": {"A": [4.0, 9.0], "B": [14.0]}})
         self.assertEqual({k: len(v) for k, v in answer["groups"].items()}, {"A": 2, "B": 1})
 
+    def test_the_start_buffer_applies_to_the_whole_recording_search(self):
+        cache, key, label, clean = self.reference()
+        for buffer_s in (0.0, 5.0, 10.0):
+            with self.subTest(buffer_s=buffer_s):
+                answer = self.call("compute.peaks", {"recording": self.ref, "scope": "whole", "z_threshold": 2.0, "start_buffer_s": buffer_s})
+                self.assertEqual(answer["peaks"], pl.find_significant_peaks(cache["x"], clean, z_threshold=2.0, start_buffer_s=buffer_s))
+        default = self.call("compute.peaks", {"recording": self.ref, "scope": "whole", "z_threshold": 2.0})
+        self.assertEqual(default["peaks"], pl.find_significant_peaks(cache["x"], clean, z_threshold=2.0))
+
+    def test_the_shuffle_null_comes_with_the_peaks_near_events_when_asked_for(self):
+        cache, key, label, clean = self.reference()
+        times = [4.0, 9.0, 14.0]
+        params = {"recording": self.ref, "scope": "events", "z_threshold": 1.0, "events": {"L1P": times}, "pre": 2.0, "post": 3.0}
+        plain = self.call("compute.peaks", params)
+        self.assertNotIn("null", plain)
+        answer = self.call("compute.peaks", {**params, "n_shuffles": 50, "seed": 3})
+        self.assertEqual(answer["groups"], plain["groups"])
+        want = pl.shuffle_null_near_events(cache["x"], clean, times, 2.0, 3.0, z_threshold=1.0, n_shuffles=50, seed=3)
+        self.assertEqual(answer["null"], {"L1P": {**want, "p_count_holm": want["p_count"]}})        # one event type: nothing to correct for
+
+    def test_every_event_type_gets_its_own_null(self):
+        answer = self.call("compute.peaks", {"recording": self.ref, "scope": "events", "z_threshold": 1.0, "pre": 2.0, "post": 3.0,
+                                              "events": {"A": [4.0, 9.0], "B": [14.0]}, "n_shuffles": 20})
+        self.assertEqual(set(answer["null"]), {"A", "B"})
+        self.assertEqual({k: len(v["p_event"]) for k, v in answer["null"].items()}, {"A": 2, "B": 1})
+        for null in answer["null"].values():                                                       # Holm across the two types
+            self.assertGreaterEqual(null["p_count_holm"], null["p_count"])
+            self.assertLessEqual(null["p_count_holm"], 1.0)
+
     def test_bad_parameters_are_parameter_errors(self):
         for params in ({"scope": "nope", "z_threshold": 1}, {"scope": "events", "z_threshold": 1, "pre": 1, "post": 1},
                        {"scope": "events", "z_threshold": 1, "events": {"A": ["x"]}, "pre": 1, "post": 1},
-                       {"scope": "events", "z_threshold": 1, "events": {"A": [1]}, "pre": 0, "post": 1}):
+                       {"scope": "events", "z_threshold": 1, "events": {"A": [1]}, "pre": 0, "post": 1},
+                       {"scope": "whole", "z_threshold": 1, "start_buffer_s": -1},
+                       {"scope": "events", "z_threshold": 1, "events": {"A": [1]}, "pre": 1, "post": 1, "n_shuffles": -1}):
             with self.subTest(params=params), self.assertRaises(pl.analyses.ParameterError):
                 self.call("compute.peaks", {"recording": self.ref, **params})
         with self.assertRaises(pl.analyses.ParameterError):

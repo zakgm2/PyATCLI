@@ -13,7 +13,9 @@ from PyATCLI.analysis.event_peth import (
     compute_auc_matrix, compute_event_zscore_peth, compute_group_stats,
     compute_peri_event_from_trace, compute_peri_event_matrix,
 )
-from PyATCLI.analysis.peak_finder import find_peak_near_events, find_significant_peaks
+from PyATCLI.analysis.peak_finder import (
+    DEFAULT_START_BUFFER_S, find_peak_near_events, find_significant_peaks, holm_adjust, shuffle_null_near_events,
+)
 from PyATCLI.analysis.zscore_peth import bin_for_heatmap, get_zscore_slice
 
 
@@ -384,6 +386,143 @@ class TestPeakFinding(unittest.TestCase):
             self.assertGreater(r["z_score"], 5.0)
         self.assertIsNone(res[2]["peak_time"])
         self.assertIsNone(res[2]["latency"])
+
+    def test_peaks_inside_the_start_buffer_are_not_reported(self):
+        t, y = self._signal([(5, 5), (100, 5), (250, 5)])
+        every = find_significant_peaks(t, y, z_threshold=2.5, min_distance_sec=10.0, start_buffer_s=0)
+        buffered = find_significant_peaks(t, y, z_threshold=2.5, min_distance_sec=10.0, start_buffer_s=10)
+        self.assertEqual(len(every), 3)
+        self.assertEqual(len(buffered), 2)
+        for got, want in zip(buffered, (100, 250)):
+            self.assertAlmostEqual(got["time"], want, delta=1.0)
+
+    def test_the_buffer_does_not_change_the_z_score_of_a_peak_that_remains(self):
+        """The mean and SD still come from the whole recording: cutting the start out instead shrinks the SD and
+        raises every z (and, with motion in the data, the number of false peaks)."""
+        t, y = self._signal([(5, 8), (100, 5), (250, 5)])
+        every = find_significant_peaks(t, y, z_threshold=2.5, min_distance_sec=10.0, start_buffer_s=0)
+        for buffer_s in (10, 60, 200):
+            with self.subTest(buffer_s=buffer_s):
+                self.assertEqual(find_significant_peaks(t, y, z_threshold=2.5, min_distance_sec=10.0, start_buffer_s=buffer_s),
+                                 [f for f in every if f["time"] >= buffer_s])
+
+    def test_the_buffer_counts_from_the_first_sample_not_from_time_zero(self):
+        t, y = self._signal([(5, 5), (100, 5)], seconds=200)
+        late = t + 5000.0                                             # the same recording on a clock that starts at 5000 s
+        a = find_significant_peaks(t, y, z_threshold=2.5, min_distance_sec=10.0, start_buffer_s=10)
+        b = find_significant_peaks(late, y, z_threshold=2.5, min_distance_sec=10.0, start_buffer_s=10)
+        self.assertEqual(len(a), 1)
+        self.assertEqual([f["time"] + 5000.0 for f in a], [f["time"] for f in b])
+
+    def test_the_buffer_cannot_be_negative_and_can_cover_everything(self):
+        t, y = self._signal([(100, 5)], seconds=200)
+        with self.assertRaises(ValueError):
+            find_significant_peaks(t, y, start_buffer_s=-1)
+        self.assertEqual(find_significant_peaks(t, y, z_threshold=2.5, start_buffer_s=500), [])
+
+    def test_the_default_buffer_is_ten_seconds(self):
+        self.assertEqual(DEFAULT_START_BUFFER_S, 10.0)
+        self.assertEqual(inspect.signature(find_significant_peaks).parameters["start_buffer_s"].default, DEFAULT_START_BUFFER_S)
+
+
+class TestShuffleNull(unittest.TestCase):
+    FS = 20.0
+    LOCKED = [60.0, 180.0, 300.0, 420.0]
+
+    def _noise(self, seed=3, seconds=600, noise=0.1):
+        rng = np.random.default_rng(seed)
+        t = np.arange(0, seconds, 1 / self.FS)
+        return t, rng.normal(0, noise, t.size)
+
+    def test_events_with_a_response_beat_chance_and_events_without_one_do_not(self):
+        t, y = _trace_with_events(seconds=600, event_times=self.LOCKED, amp=0.8, noise=0.1, seed=1)
+        locked = shuffle_null_near_events(t, y, self.LOCKED, pre=5, post=10, n_shuffles=499, seed=0)
+        self.assertTrue(locked["available"])
+        self.assertEqual((locked["n_events"], locked["n_tested"], locked["found"]), (4, 4, 4))
+        self.assertLessEqual(locked["p_count"], 0.05)
+        self.assertTrue(all(p <= 0.1 for p in locked["p_event"]))
+        quiet = shuffle_null_near_events(t, y, [90.0, 150.0, 240.0, 360.0], pre=5, post=10, n_shuffles=499, seed=0)
+        self.assertEqual(quiet["found"], 0)
+        self.assertEqual(quiet["p_count"], 1.0)                      # nothing to beat: every shuffle has at least 0
+        self.assertTrue(all(p > 0.05 for p in quiet["p_event"]))
+
+    def test_the_chance_rate_is_the_rate_the_search_gives_random_events(self):
+        t, y = self._noise(seed=5)
+        events = list(np.random.default_rng(6).uniform(20, 580, 400))
+        direct = np.mean([r["found"] for r in find_peak_near_events(t, y, events, pre=5, post=10, z_threshold=2.5)])
+        null = shuffle_null_near_events(t, y, events[:40], pre=5, post=10, z_threshold=2.5, n_shuffles=200, seed=0)
+        self.assertGreater(direct, 0.7)                              # (the point of the null: this is most windows of pure noise)
+        self.assertAlmostEqual(null["chance_hit_rate"], direct, delta=0.05)
+
+    def test_events_that_are_chance_findings_are_not_significant(self):
+        t, y = self._noise(seed=7)
+        events = list(np.sort(np.random.default_rng(8).uniform(20, 580, 30)))
+        null = shuffle_null_near_events(t, y, events, pre=5, post=10, z_threshold=2.5, n_shuffles=499, seed=0)
+        self.assertGreater(null["found"], 15)                        # "found" in most windows ...
+        self.assertGreater(null["p_count"], 0.05)                    # ... and still no better than shifted copies of the same events
+        self.assertAlmostEqual(null["expected_by_chance"], null["chance_hit_rate"] * null["n_tested"], delta=1.5)
+
+    def test_it_counts_the_events_find_peak_near_events_finds(self):
+        t, y = _trace_with_events(seconds=600, event_times=(100, 200, 300), amp=0.8, noise=0.1)
+        events = [100.0, 200.0, 300.0, 400.0]
+        direct = find_peak_near_events(t, y, events, 5, 10)
+        null = shuffle_null_near_events(t, y, events, 5, 10, n_shuffles=50)
+        self.assertEqual(null["found"], sum(r["found"] for r in direct))
+
+    def test_troughs_count_only_when_asked_for(self):
+        t, y = _trace_with_events(seconds=600, event_times=self.LOCKED, amp=-0.8, noise=0.1, seed=1)
+        off = shuffle_null_near_events(t, y, self.LOCKED, 5, 10, n_shuffles=99)
+        on = shuffle_null_near_events(t, y, self.LOCKED, 5, 10, include_troughs=True, n_shuffles=99)
+        self.assertEqual(off["found"], 0)
+        self.assertEqual(on["found"], 4)
+
+    def test_the_same_seed_gives_the_same_answer_and_another_seed_another_one(self):
+        t, y = self._noise(seed=9)
+        events = [100.0, 200.0, 300.0]
+        a = shuffle_null_near_events(t, y, events, 5, 10, z_threshold=2.0, n_shuffles=100, seed=1)
+        self.assertEqual(a, shuffle_null_near_events(t, y, events, 5, 10, z_threshold=2.0, n_shuffles=100, seed=1))
+        self.assertNotEqual(a["p_event"], shuffle_null_near_events(t, y, events, 5, 10, z_threshold=2.0, n_shuffles=100, seed=2)["p_event"])
+        self.assertEqual(a["seed"], 1)
+
+    def test_every_p_is_a_probability_and_cannot_be_zero(self):
+        t, y = _trace_with_events(seconds=600, event_times=self.LOCKED, amp=3.0, noise=0.1, seed=1)
+        null = shuffle_null_near_events(t, y, self.LOCKED, 5, 10, n_shuffles=99)
+        floor = 1 / 100
+        self.assertTrue(all(floor <= p <= 1 for p in null["p_event"] + [null["p_count"]]))
+
+    def test_an_event_whose_window_is_cut_stays_put_and_one_past_the_end_has_no_p(self):
+        t, y = self._noise()
+        null = shuffle_null_near_events(t, y, [2.0, 300.0, 5000.0], 5, 10, n_shuffles=50)
+        self.assertEqual((null["n_events"], null["n_tested"]), (3, 1))
+        self.assertIsNotNone(null["p_event"][0])
+        self.assertIsNotNone(null["p_event"][1])
+        self.assertIsNone(null["p_event"][2])
+
+    def test_when_nothing_can_be_shifted_it_says_why(self):
+        t, y = self._noise(seconds=10)
+        short = shuffle_null_near_events(t, y, [5.0], pre=5, post=10)
+        self.assertFalse(short["available"])
+        self.assertIn("shorter than the window", short["reason"])
+        self.assertEqual(short["p_event"], [None])
+        t, y = self._noise()
+        edge = shuffle_null_near_events(t, y, [1.0, 2.0], pre=5, post=10)
+        self.assertFalse(edge["available"])
+        self.assertIn("complete window", edge["reason"])
+
+    def test_holm_adjust_is_statsmodels_holm_and_leaves_untested_entries_alone(self):
+        from statsmodels.stats.multitest import multipletests
+        rng = np.random.default_rng(0)
+        for n in (1, 2, 5, 12):
+            p = list(rng.uniform(0, 1, n) ** 3)
+            np.testing.assert_allclose(holm_adjust(p), multipletests(p, method="holm")[1], rtol=1e-12)
+        self.assertEqual(holm_adjust([0.01, None, 0.04]), [0.02, None, 0.04])
+        self.assertEqual(holm_adjust([None, None]), [None, None])
+        self.assertEqual(holm_adjust([]), [])
+
+    def test_the_number_of_shuffles_must_be_at_least_one(self):
+        t, y = self._noise()
+        with self.assertRaises(ValueError):
+            shuffle_null_near_events(t, y, [100.0], 5, 10, n_shuffles=0)
 
 
 if __name__ == "__main__":

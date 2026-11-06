@@ -182,6 +182,28 @@ class TestTheRecordNotTheSavedState(DiskCase):
         self.assertEqual(rec["analysis"]["parameters"]["event_times"], [11.0])
 
 
+class TestARecordFromBeforeAParameterExisted(DiskCase):
+    def test_a_peak_finder_record_without_the_start_buffer_and_shuffles_replays_as_it_was_run(self):
+        """Records written before the Peak Finder had a start buffer (and a chance level) hold neither. A replay that used
+        today's defaults (a 10 s buffer) would drop the peak at 9 s and not repeat the run."""
+        old = {"scope": "whole", "z_threshold": 3.0, "min_distance_s": 1.0, "start_buffer_s": 0.0, "n_shuffles": 0}
+        rec_path, result, _ = export(self.folder, self.out, "peak_finder", old)
+        self.assertLess(result.tables["peaks"]["time_s"].min(), 10.0)                   # the run had a peak inside today's default buffer
+        record = pv.read_record(rec_path)
+        for name in ("start_buffer_s", "n_shuffles", "seed"):
+            del record["analysis"]["parameters"][name]
+        rep = R.reproduce(record)
+        pd.testing.assert_frame_equal(rep.result.tables["peaks"], result.tables["peaks"])
+        self.assertEqual((rep.result.parameters["start_buffer_s"], rep.result.parameters["n_shuffles"]), (0.0, 0))
+
+    def test_a_current_record_keeps_its_own_values(self):
+        params = {"event": "L1P¹", "z_threshold": 1.0, "scope": "all_same_name", "pre_s": 2.0, "post_s": 3.0, "n_shuffles": 30, "seed": 4}
+        rec_path, result, _ = export(self.folder, self.out, "peak_finder", params)
+        rep = R.reproduce(rec_path)
+        self.assertIn("p (shuffle)", rep.result.tables["alignment"].columns)
+        pd.testing.assert_frame_equal(rep.result.tables["alignment"], result.tables["alignment"])
+
+
 class TestWhenTheRecordingIsNotTheSame(DiskCase):
     def setUp(self):
         super().setUp()

@@ -41,8 +41,8 @@ import pandas as pd
 from .analysis import (
     compute_auc_from_trace, compute_auc_matrix, compute_auc_window, compute_event_zscore_peth, compute_fft_slice,
     compute_group_stats, compute_marker_intervals, compute_peri_event_from_trace, compute_peri_event_matrix,
-    find_fft_peaks, find_peak_near_events, find_significant_peaks, fit_model_to_segment, get_zscore_slice,
-    mean_channels, smooth_signal,
+    DEFAULT_SHUFFLES, DEFAULT_START_BUFFER_S, find_fft_peaks, find_peak_near_events, find_significant_peaks, fit_model_to_segment,
+    get_zscore_slice, holm_adjust, mean_channels, shuffle_null_near_events, smooth_signal,
 )
 from .analysis.group import GroupSpec
 from .analysis.group.report import trace_frame
@@ -50,6 +50,7 @@ from .analysis.group.run import GROUP_SETTINGS_FILENAME, run_group_analysis
 from .markers import group_markers_by_name
 from .models import CURVE_FIT_MODELS
 from .numeric import as_float64
+from .progress import Plan
 from .recording import normalized_signal
 
 DEFAULT_WINDOW_S = 15.0           # the app's own default analysis window, each side of the point
@@ -73,6 +74,9 @@ class AnalysisResult:
     notes: list = field(default_factory=list)
 
 
+NO_LEGACY = object()               # Param.legacy of a parameter that has always been there
+
+
 @dataclass(frozen=True)
 class Param:
     name: str
@@ -81,6 +85,7 @@ class Param:
     required: bool = False
     doc: str = ""
     choices: tuple = ()
+    legacy: object = NO_LEGACY      # what a record made before this parameter existed meant by leaving it out (fill_legacy)
 
 
 @dataclass(frozen=True)
@@ -254,6 +259,18 @@ def normalize_parameters(kind, parameters=None):
             raise ParameterError(f"{kind}: {name} is required ({p.doc})")
         else:
             out[name] = p.default
+    return out
+
+
+def fill_legacy(kind, parameters):
+    """`parameters` from a record, with each parameter the record lacks that was added after it was written set to the
+    value that means what the analysis did then (Param.legacy), not to today's default. A record stores every parameter
+    of the run, so a missing one means a newer library has it: replaying with the new default would not repeat the run."""
+    out = dict(parameters or {})
+    if kind in _REGISTRY:
+        for p in _REGISTRY[kind].params:
+            if p.name not in out and p.legacy is not NO_LEGACY:
+                out[p.name] = p.legacy
     return out
 
 
@@ -512,21 +529,50 @@ def _event_peth(ctx, p):
            Param("event_times", "floats", None, doc="use these event times instead of looking the event up"),
            Param("event_groups", "groups", None, doc="scope scan_all: {event name: times} to scan instead of the recording's own "
                                                       "(what a record stores)"),
-           _PRE, _POST])
+           _PRE, _POST,
+           Param("start_buffer_s", "float", DEFAULT_START_BUFFER_S, legacy=0.0,
+                 doc="seconds at the start of the recording in which no peak is reported (scope whole)"),
+           Param("n_shuffles", "int", DEFAULT_SHUFFLES, legacy=0,
+                 doc="scopes near events: shifted copies of the event train that measure how often a peak turns up by chance "
+                     "and give each event a p-value (0: none)"),
+           Param("seed", "int", 0, doc="the shuffles' random seed: the same seed gives the same p-values")])
 def _peak_finder(ctx, p):
     cache = ctx.cache
     _, _, y = normalized_signal(cache)
     clean = smooth_signal(y, cache["fs"])
     x, scope, thr, tr = cache["x"], p["scope"], p["z_threshold"], p["include_troughs"]
-    ALIGN = ["Event Time (s)", "Found", "Latency (s)", "Z-score"]
+    shuffles, seed = p["n_shuffles"], p["seed"]
+    if p["start_buffer_s"] < 0:
+        raise ParameterError(f"peak_finder: start_buffer_s cannot be negative (got {p['start_buffer_s']!r})")
+    if shuffles < 0:
+        raise ParameterError(f"peak_finder: n_shuffles cannot be negative (got {shuffles!r})")
+    ALIGN = ["Event Time (s)", "Found", "Latency (s)", "Z-score"] + (["p (shuffle)"] if shuffles else [])
+    notes = []
 
-    def align_rows(results):
-        return [[r["event_time"], r["found"], r["latency"] if r["found"] else None, r["z_score"] if r["found"] else None] for r in results]
+    def search(times, label, progress_search=None, progress_null=None):
+        results = find_peak_near_events(x, clean, times, p["pre_s"], p["post_s"], z_threshold=thr, include_troughs=tr, progress=progress_search)
+        null = None
+        if shuffles:
+            null = shuffle_null_near_events(x, clean, times, p["pre_s"], p["post_s"], z_threshold=thr, include_troughs=tr,
+                                            n_shuffles=shuffles, seed=seed, progress=progress_null)
+            if not null["available"]:
+                notes.append(f"{label}: no chance level could be measured, {null['reason']}")
+        return results, null
+
+    def align_rows(results, null):
+        rows = [[r["event_time"], r["found"], r["latency"] if r["found"] else None, r["z_score"] if r["found"] else None] for r in results]
+        if shuffles:
+            p_events = null["p_event"] if null["available"] else [None] * len(results)
+            rows = [row + [pe] for row, pe in zip(rows, p_events)]
+        return rows
 
     if scope == "whole":
-        peaks = find_significant_peaks(x, clean, z_threshold=thr, min_distance_sec=p["min_distance_s"], include_troughs=tr)
+        peaks = find_significant_peaks(x, clean, z_threshold=thr, min_distance_sec=p["min_distance_s"], include_troughs=tr,
+                                       start_buffer_s=p["start_buffer_s"])
+        if p["start_buffer_s"] > 0 and p["start_buffer_s"] >= x[-1] - x[0]:
+            notes.append(f"the start buffer ({p['start_buffer_s']:g} s) covers the whole recording, so nothing was searched")
         return ({"peaks": _frame(["time_s", "z_score", "kind"], [[q["time"], q["z_score"], q["kind"]] for q in peaks])},
-                {"n_peaks": len(peaks)}, [])
+                {"n_peaks": len(peaks)}, notes)
     if scope == "one_event":
         if p["event_time"] is None and not p["event_times"]:
             raise ParameterError("peak_finder: scope one_event needs event_time")
@@ -539,23 +585,36 @@ def _peak_finder(ctx, p):
         times = None
     if times is not None:
         ctx.resolved["event_times"] = [float(t) for t in times]
-        results = find_peak_near_events(x, clean, times, p["pre_s"], p["post_s"], z_threshold=thr, include_troughs=tr, progress=ctx.progress)
-        return ({"alignment": _frame(ALIGN, align_rows(results))},
-                {"n_events": len(results), "n_found": sum(1 for r in results if r["found"])}, [])
+        plan = Plan(ctx.progress, [("Searching for peaks", 1)] + ([("Shuffling event times", shuffles)] if shuffles else []))
+        results, null = search(times, "these events", plan.sub("Searching for peaks"), plan.sub("Shuffling event times") if shuffles else None)
+        summary = {"n_events": len(results), "n_found": sum(1 for r in results if r["found"])}
+        if null is not None and null["available"]:
+            summary.update(chance_hit_rate=null["chance_hit_rate"], expected_found_by_chance=null["expected_by_chance"], p_shuffle=null["p_count"])
+        return {"alignment": _frame(ALIGN, align_rows(results, null))}, summary, notes
     groups = p["event_groups"] if p["event_groups"] is not None else group_markers_by_name(cache, ctx.store_labels)
     ctx.resolved["event_groups"] = {name: [float(t) for t in times] for name, times in groups.items()}
-    by_event = {name: find_peak_near_events(x, clean, t, p["pre_s"], p["post_s"], z_threshold=thr, include_troughs=tr)
-                for name, t in groups.items()}
+    plan = Plan(ctx.progress, [(name, max(1, len(t)) * (1 + shuffles)) for name, t in groups.items()])
+    by_event, nulls = {}, {}
+    for name, t in groups.items():
+        by_event[name], nulls[name] = search(t, name, progress_null=plan.sub(name) if shuffles else None)
     scan = []
     for name, results in by_event.items():
         found = [r for r in results if r["found"]]
-        scan.append([name, len(results), len(found), len(found) / len(results) if results else 0.0,
-                     sum(r["z_score"] for r in found) / len(found) if found else None])
+        row = [name, len(results), len(found), len(found) / len(results) if results else 0.0,
+               sum(r["z_score"] for r in found) / len(found) if found else None]
+        if shuffles:
+            null = nulls[name]
+            row += [null["chance_hit_rate"], null["p_count"]] if null["available"] else [None, None]
+        scan.append(row)
+    scan_cols = ["Event", "Occurrences", "Found", "Hit Rate", "Avg Z (found only)"]
+    if shuffles:                                              # p across the event types looked at: Holm, as in the group analysis
+        for row, adjusted in zip(scan, holm_adjust([row[6] for row in scan])):
+            row.append(adjusted)
+        scan_cols += ["Chance Hit Rate", "p (shuffle)", "p (Holm)"]
     scan.sort(key=lambda r: r[3], reverse=True)
-    detail = [[name] + row for name, results in by_event.items() for row in align_rows(results)]
-    return ({"scan": _frame(["Event", "Occurrences", "Found", "Hit Rate", "Avg Z (found only)"], scan),
-             "alignment": _frame(["Event"] + ALIGN, detail)},
-            {"n_event_types": len(by_event)}, [])
+    detail = [[name] + row for name, results in by_event.items() for row in align_rows(results, nulls[name])]
+    return ({"scan": _frame(scan_cols, scan), "alignment": _frame(["Event"] + ALIGN, detail)},
+            {"n_event_types": len(by_event)}, notes)
 
 
 @analysis("event_intervals", "the time between markers: since the previous of the same store, and of any",

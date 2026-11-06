@@ -14,7 +14,7 @@ from PyATCLI import analyses as A
 from PyATCLI.analysis import (
     compute_auc_from_trace, compute_auc_matrix, compute_auc_window, compute_event_zscore_peth, compute_fft_slice,
     compute_group_stats, compute_peri_event_from_trace, compute_peri_event_matrix, find_fft_peaks, find_peak_near_events,
-    find_significant_peaks, fit_model_to_segment, get_zscore_slice, smooth_signal,
+    find_significant_peaks, fit_model_to_segment, get_zscore_slice, shuffle_null_near_events, smooth_signal,
 )
 
 EVENTS = [40.0, 90.0, 140.0, 200.0, 250.0]
@@ -70,6 +70,13 @@ class TestParameters(unittest.TestCase):
         self.assertEqual(A.normalize_parameters("event_peth", {"event": "x", "selected_trials": "1, 3 5"})["selected_trials"], [1, 3, 5])
         self.assertEqual(A.normalize_parameters("event_peth", {"event": "x", "event_times": [1, 2.5]})["event_times"], [1.0, 2.5])
         self.assertEqual(A.normalize_parameters("event_peth", {"event": "x", "event_times": "1.5,2.5"})["event_times"], [1.5, 2.5])
+
+    def test_fill_legacy_sets_what_a_record_from_before_a_parameter_meant(self):
+        self.assertEqual(A.fill_legacy("peak_finder", {"scope": "whole"}), {"scope": "whole", "start_buffer_s": 0.0, "n_shuffles": 0})
+        both = {"scope": "whole", "start_buffer_s": 3.0, "n_shuffles": 7}
+        self.assertEqual(A.fill_legacy("peak_finder", both), both)
+        self.assertEqual(A.fill_legacy("zscore_window", {"center_s": 1.0}), {"center_s": 1.0})        # parameters that always existed
+        self.assertEqual(A.fill_legacy("not_an_analysis", {"a": 1}), {"a": 1})
 
     def test_booleans_accept_words(self):
         for text, want in (("true", True), ("yes", True), ("0", False), ("off", False)):
@@ -354,7 +361,8 @@ class TestPeakFinder(unittest.TestCase):
         self.assertGreaterEqual(len(want), 1)
 
     def test_all_events_of_one_name(self):
-        r = A.run_analysis("peak_finder", self.c, {"scope": "all_same_name", "event": "L1P¹", "z_threshold": 2.0, "pre_s": 5, "post_s": 10})
+        r = A.run_analysis("peak_finder", self.c, {"scope": "all_same_name", "event": "L1P¹", "z_threshold": 2.0, "pre_s": 5, "post_s": 10,
+                                                    "n_shuffles": 0})
         want = find_peak_near_events(self.c["x"], self.clean, EVENTS, 5, 10, z_threshold=2.0)
         self.assertEqual(list(r.tables["alignment"].columns), ["Event Time (s)", "Found", "Latency (s)", "Z-score"])
         self.assertEqual(list(r.tables["alignment"]["Found"]), [w["found"] for w in want])
@@ -373,7 +381,7 @@ class TestPeakFinder(unittest.TestCase):
         self.assertTrue(pd.isna(row["Latency (s)"]) and pd.isna(row["Z-score"]))
 
     def test_scan_all_types_is_sorted_by_hit_rate(self):
-        r = A.run_analysis("peak_finder", self.c, {"scope": "scan_all", "z_threshold": 3.0, "pre_s": 5, "post_s": 10})
+        r = A.run_analysis("peak_finder", self.c, {"scope": "scan_all", "z_threshold": 3.0, "pre_s": 5, "post_s": 10, "n_shuffles": 0})
         scan = r.tables["scan"]
         self.assertEqual(list(scan.columns), ["Event", "Occurrences", "Found", "Hit Rate", "Avg Z (found only)"])
         self.assertEqual(set(scan["Event"]), {"L1P¹", "L1P⁰", "MyNote"})
@@ -387,6 +395,71 @@ class TestPeakFinder(unittest.TestCase):
         again = A.run_analysis("peak_finder", {**self.c, "markers": [], "detected_markers": []}, r.parameters)
         for name in r.tables:
             pd.testing.assert_frame_equal(r.tables[name], again.tables[name])
+
+    def _with_an_early_transient(self):
+        c = make_cache()
+        y = c["signals"]["normalized"]["y"] + 1.5 * np.exp(-0.5 * ((c["x"] - 5.0) / 0.5) ** 2)
+        return {**c, "signals": {"normalized": {"label": "Normalized (dF/F)", "y": y}}}
+
+    def test_the_start_buffer_hides_the_peaks_at_the_start_of_the_recording(self):
+        c = self._with_an_early_transient()
+        whole = {"scope": "whole", "z_threshold": 2.0, "min_distance_s": 5.0}
+        every = A.run_analysis("peak_finder", c, {**whole, "start_buffer_s": 0})
+        default = A.run_analysis("peak_finder", c, whole)
+        self.assertEqual(default.parameters["start_buffer_s"], 10.0)
+        self.assertLess(every.tables["peaks"]["time_s"].min(), 10.0)
+        self.assertGreaterEqual(default.tables["peaks"]["time_s"].min(), 10.0)
+        self.assertEqual(len(every.tables["peaks"]) - len(default.tables["peaks"]), 1)
+
+    def test_a_buffer_that_covers_the_recording_is_a_note_not_an_error(self):
+        r = A.run_analysis("peak_finder", self.c, {"scope": "whole", "z_threshold": 2.0, "start_buffer_s": 1000})
+        self.assertEqual(len(r.tables["peaks"]), 0)
+        self.assertTrue(any("covers the whole recording" in n for n in r.notes))
+
+    def test_events_come_with_their_chance_level_by_default(self):
+        r = A.run_analysis("peak_finder", self.c, {"scope": "all_same_name", "event": "L1P¹", "z_threshold": 2.0, "pre_s": 5, "post_s": 10})
+        self.assertEqual((r.parameters["n_shuffles"], r.parameters["seed"]), (1000, 0))
+        alignment = r.tables["alignment"]
+        self.assertEqual(list(alignment.columns), ["Event Time (s)", "Found", "Latency (s)", "Z-score", "p (shuffle)"])
+        self.assertTrue(((alignment["p (shuffle)"] >= 1 / 1001) & (alignment["p (shuffle)"] <= 1)).all())
+        self.assertTrue({"chance_hit_rate", "expected_found_by_chance", "p_shuffle"} <= set(r.summary))
+
+    def test_the_chance_level_is_the_librarys(self):
+        r = A.run_analysis("peak_finder", self.c, {"scope": "all_same_name", "event": "L1P¹", "z_threshold": 2.0, "pre_s": 5, "post_s": 10,
+                                                    "n_shuffles": 200, "seed": 5})
+        want = shuffle_null_near_events(self.c["x"], self.clean, EVENTS, 5, 10, z_threshold=2.0, n_shuffles=200, seed=5)
+        assert_allclose(r.tables["alignment"]["p (shuffle)"].to_numpy(dtype=float), want["p_event"])
+        self.assertEqual(r.summary["p_shuffle"], want["p_count"])
+
+    def test_the_same_seed_gives_the_same_tables_and_no_shuffles_gives_no_chance_level(self):
+        p = {"scope": "all_same_name", "event": "L1P¹", "z_threshold": 2.0, "pre_s": 5, "post_s": 10, "n_shuffles": 100}
+        a, b = A.run_analysis("peak_finder", self.c, p), A.run_analysis("peak_finder", self.c, p)
+        pd.testing.assert_frame_equal(a.tables["alignment"], b.tables["alignment"])
+        off = A.run_analysis("peak_finder", self.c, {**p, "n_shuffles": 0})
+        self.assertNotIn("p (shuffle)", off.tables["alignment"].columns)
+        self.assertNotIn("p_shuffle", off.summary)
+
+    def test_scan_all_adds_the_chance_rate_and_p_values_corrected_across_the_event_types(self):
+        r = A.run_analysis("peak_finder", self.c, {"scope": "scan_all", "z_threshold": 3.0, "pre_s": 5, "post_s": 10, "n_shuffles": 100})
+        scan = r.tables["scan"]
+        self.assertEqual(list(scan.columns), ["Event", "Occurrences", "Found", "Hit Rate", "Avg Z (found only)",
+                                              "Chance Hit Rate", "p (shuffle)", "p (Holm)"])
+        tested = scan.dropna(subset=["p (shuffle)"])
+        self.assertGreaterEqual(len(tested), 1)
+        self.assertTrue((tested["p (Holm)"] >= tested["p (shuffle)"] - 1e-12).all())
+        self.assertTrue((tested["p (Holm)"] <= 1.0).all())
+        self.assertIn("p (shuffle)", r.tables["alignment"].columns)
+
+    def test_a_recording_too_short_for_the_window_says_so_instead_of_failing(self):
+        r = A.run_analysis("peak_finder", self.c, {"scope": "one_event", "event_time": 90.0, "z_threshold": 2.0, "pre_s": 200, "post_s": 200,
+                                                    "n_shuffles": 50})
+        self.assertTrue(any("no chance level" in n for n in r.notes))
+        self.assertTrue(pd.isna(r.tables["alignment"]["p (shuffle)"]).all())
+
+    def test_a_negative_buffer_or_shuffle_count_is_refused(self):
+        for params in ({"scope": "whole", "start_buffer_s": -1}, {"scope": "all_same_name", "event": "L1P¹", "n_shuffles": -1}):
+            with self.subTest(params=params), self.assertRaises(A.ParameterError):
+                A.run_analysis("peak_finder", self.c, params)
 
     def test_event_groups_are_checked(self):
         p = A.normalize_parameters("peak_finder", {"scope": "scan_all", "event_groups": {"a": ["1", 2]}})

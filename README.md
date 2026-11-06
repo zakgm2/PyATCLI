@@ -13,7 +13,7 @@ The analysis library, engine and command line behind [PyAT (Python Analysis Tool
   - **Oxysoft / Artinis** (Oxymon, OctaMon, PortaMon …) NIRS `.txt` exports
   - **Terranova Prospa** `.pt2` EFNMR/MRI 2D images
   - Generic **Excel / CSV / TSV / plain text**, with automatic sub-table detection for side-by-side data layouts on one sheet
-- **Processes signals** — RANSAC-robust motion correction, bleach correction, denoising, Z-score PETH slicing, FFT with peak annotation, slope/segment analysis
+- **Processes signals** — RANSAC-robust motion correction, bleach correction, denoising, Z-score PETH slicing, FFT with peak annotation, peak finding (a start buffer, and a shuffle-based chance level for the peaks found near events), slope/segment analysis
 - **Fits curves** — linear, single/double exponential, exponential rise, Gaussian, sinusoidal, and a photon-entanglement visibility model, all via `scipy.optimize.curve_fit`
 - **Analyses text field studies** — one JSON file per subject with several free-text fields; pick any pair of fields to compare directly (e.g. does the answer to one question track another for the same subject). Word counts, data-quality flagging, sentence-transformers embeddings, an optional delta-vector magnitude between two fields, and an optional paired-similarity metric per pair with a permutation test and a word-count confound check. Domain-agnostic — field names and which pairs to compare are supplied by the caller, nothing is hardcoded to one study
 - **Validates the similarity metric statistically** — Benjamini-Hochberg FDR-corrected permutation-test p-values, Cohen's d effect size, a word-count-controlled OLS regression (statsmodels), a bootstrap confidence interval on the mean, and a leave-one-out sensitivity check, one row per field pair, with docstrings explaining what each statistic means
@@ -78,7 +78,7 @@ That also installs the `pyatcli` command (`python -m PyATCLI` is the same thing)
 pip install git+https://github.com/zakgm2/PyATCLI.git
 ```
 
-As a dependency of another project: `PyATCLI>=2026.10.10` in its `requirements.txt` or `pyproject.toml`.
+As a dependency of another project: `PyATCLI>=2026.11.2` in its `requirements.txt` or `pyproject.toml`.
 
 ### Requirements
 
@@ -251,7 +251,7 @@ Everything importable from `PyATCLI` directly:
 | Provenance and reproducing | `build_record`, `write_record`, `read_record`, `recording_state`, `file_fingerprint`, `pipeline_parameters`, `software_versions`, `library_version`, `check_environment`, `markers_summary`, `output_entry`, `sidecar_path_for`, `PROVENANCE_SCHEMA_VERSION`, `PROVENANCE_SUFFIX`, `reproduce_record`, `compare_table`, `Reproduction`, `ReproduceError` (the module `PyATCLI.reproduce` holds the rest) |
 | Splicing | `apply_splice`, `apply_splices`, `spliced_store_name`, `splice_keep_inside`, `splice_cut_out`, `replay_splices`, `MODE_CUT_OUT`, `MODE_KEEP_INSIDE` |
 | Markers | `marker_display_label`, `store_display_name`, `group_markers_by_name`, `compute_marker_intervals` |
-| Analysis | `get_zscore_slice`, `smooth_signal`, `bin_for_heatmap`, `compute_event_zscore_peth`, `compute_fft_slice`, `find_fft_peaks`, `compute_slope_segment`, `fit_model_to_segment`, `find_significant_peaks`, `find_peak_near_events`, `compute_auc_window`, `compute_auc_from_trace`, `compute_auc_matrix`, `compute_peri_event_from_trace`, `compute_peri_event_matrix`, `compute_group_stats`, `estimate_sample_rate`, `mean_channels` |
+| Analysis | `get_zscore_slice`, `smooth_signal`, `bin_for_heatmap`, `compute_event_zscore_peth`, `compute_fft_slice`, `find_fft_peaks`, `compute_slope_segment`, `fit_model_to_segment`, `find_significant_peaks`, `find_peak_near_events`, `shuffle_null_near_events`, `compute_auc_window`, `compute_auc_from_trace`, `compute_auc_matrix`, `compute_peri_event_from_trace`, `compute_peri_event_matrix`, `compute_group_stats`, `estimate_sample_rate`, `mean_channels` |
 | Group analysis | `GroupSpec`, `scan_recording`, `scan_recordings`, `default_subject_names`, `load_group_recording`, `run_group_analysis`, `write_group_settings`, `read_group_settings`, `GROUP_SETTINGS_FILENAME`, `marker_index`, `common_markers`, `design_summary`, `extract_group_trials`, `fit_group_models`, `GroupResults`, `write_group_results`, `group_report_text` |
 | Curve fit models | `CURVE_FIT_MODELS`, `linear_model`, `single_exponential_model`, `exponential_rise_model`, `double_exponential_model`, `gaussian_model`, `sinusoidal_model`, `visibility_model` |
 | Text field study | `run_field_study_pipeline`, `load_field_study_folder`, `peek_fields`, `flag_low_quality`, `embed_text_fields`, `compute_delta_vector`, `compute_paired_similarity`, `permutation_test_similarity`, `wordcount_confound_check` |

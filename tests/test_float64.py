@@ -254,6 +254,8 @@ class TestEveryEntryPointWidensItsInput(unittest.TestCase):
         yield "find_significant_peaks", lambda c: peak_finder.find_significant_peaks(c(self.x32), c(self.y32), z_threshold=2.0)
         yield "find_peak_near_events", lambda c: peak_finder.find_peak_near_events(
             c(self.x32), c(self.y32), self.events, 5, 5, z_threshold=1.0)
+        yield "shuffle_null_near_events", lambda c: peak_finder.shuffle_null_near_events(
+            c(self.x32), c(self.y32), self.events, 5, 5, z_threshold=1.0, n_shuffles=20)
         yield "compute_auc_from_trace", lambda c: auc.compute_auc_from_trace(c(self.axis32), c(self.matrix32[0]))
         yield "compute_auc_window", lambda c: auc.compute_auc_window(c(self.x32), c(self.y32), 15.0, 5, 5)
         yield "compute_auc_matrix", lambda c: event_peth.compute_auc_matrix(c(self.axis32), c(self.matrix32))

@@ -25,7 +25,7 @@ import tdt
 
 from PyATCLI.sources import processing_TDT as P
 from PyATCLI.analysis.event_peth import compute_event_zscore_peth
-from PyATCLI.analysis.peak_finder import find_peak_near_events
+from PyATCLI.analysis.peak_finder import find_peak_near_events, shuffle_null_near_events
 from PyATCLI.sources.load import load_dataset, load_dataset_file
 from PyATCLI.sources.tables import load_any_file
 from PyATCLI.fieldstudy.validation import run_validation_pipeline
@@ -459,6 +459,13 @@ class TestAnalysisLoops(ProgressAssertions):
         plain = find_peak_near_events(self.t, self.y, self.events, pre=5, post=10, z_threshold=5.0)
         rec = Recorder()
         watched = find_peak_near_events(self.t, self.y, self.events, pre=5, post=10, z_threshold=5.0, progress=rec)
+        self.assert_sane(rec)
+        self.assertEqual(plain, watched)
+
+    def test_the_shuffle_null_ticks_per_shuffle_and_is_unchanged(self):
+        plain = shuffle_null_near_events(self.t, self.y, self.events, pre=5, post=10, n_shuffles=40)
+        rec = Recorder()
+        watched = shuffle_null_near_events(self.t, self.y, self.events, pre=5, post=10, n_shuffles=40, progress=rec)
         self.assert_sane(rec)
         self.assertEqual(plain, watched)
 

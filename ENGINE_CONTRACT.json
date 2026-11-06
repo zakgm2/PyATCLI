@@ -217,6 +217,21 @@
           "default": null
         },
         {
+          "name": "start_buffer_s",
+          "required": false,
+          "default": 10.0
+        },
+        {
+          "name": "n_shuffles",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "seed",
+          "required": false,
+          "default": 0
+        },
+        {
           "name": "load",
           "required": false,
           "default": null
@@ -1449,6 +1464,27 @@
           "type": "float",
           "required": false,
           "default": 15.0,
+          "choices": []
+        },
+        {
+          "name": "start_buffer_s",
+          "type": "float",
+          "required": false,
+          "default": 10.0,
+          "choices": []
+        },
+        {
+          "name": "n_shuffles",
+          "type": "int",
+          "required": false,
+          "default": 1000,
+          "choices": []
+        },
+        {
+          "name": "seed",
+          "type": "int",
+          "required": false,
+          "default": 0,
           "choices": []
         }
       ],
