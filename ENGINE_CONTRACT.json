@@ -544,6 +544,11 @@
           "default": "ols"
         },
         {
+          "name": "pipeline",
+          "required": false,
+          "default": null
+        },
+        {
           "name": "out",
           "required": false,
           "default": null
@@ -648,7 +653,8 @@
         "signal_labels",
         "restored",
         "warnings",
-        "regression_method"
+        "regression_method",
+        "pipeline"
       ]
     },
     "recording.view": {
@@ -949,6 +955,30 @@
       ],
       "result": []
     },
+    "saved.pipeline": {
+      "summary": "choose pipeline options for a recording and keep them with it (reset=True: back to the defaults); they are applied whenever it opens",
+      "parameters": [
+        {
+          "name": "recording",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "set",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "reset",
+          "required": false,
+          "default": false
+        }
+      ],
+      "result": [
+        "options",
+        "changed"
+      ]
+    },
     "saved.highlight": {
       "summary": "Highlighter + Save Changes: shade a stretch of the recording",
       "parameters": [
@@ -1025,7 +1055,7 @@
       ]
     },
     "saved.write": {
-      "summary": "Save Changes: write whole lists — markers, splices, signal names, highlights, text boxes — replacing what was saved",
+      "summary": "Save Changes: write whole lists — markers, splices, signal names, highlights, text boxes, pipeline options — replacing what was saved",
       "parameters": [
         {
           "name": "recording",
@@ -1056,6 +1086,11 @@
           "name": "text_annotations",
           "required": false,
           "default": null
+        },
+        {
+          "name": "pipeline",
+          "required": false,
+          "default": null
         }
       ],
       "result": [
@@ -1073,6 +1108,7 @@
         "frozen",
         "library",
         "packages",
+        "optional",
         "app",
         "protocol"
       ]
@@ -1088,6 +1124,43 @@
       ],
       "result": [
         "analyses"
+      ]
+    },
+    "pipeline.options": {
+      "summary": "the pipeline's options: every step, each option with its default, what values it takes and what it does (pipeline.py)",
+      "parameters": [],
+      "result": [
+        "steps",
+        "defaults"
+      ]
+    },
+    "methods.text": {
+      "summary": "the methods paragraph for a paper, written from what was done: the pipeline options in force for a recording (its saved choices, splices and reference stream), each step in words, and the software versions",
+      "parameters": [
+        {
+          "name": "recording",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "load",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "software",
+          "required": false,
+          "default": true
+        },
+        {
+          "name": "app",
+          "required": false,
+          "default": null
+        }
+      ],
+      "result": [
+        "text",
+        "options"
       ]
     },
     "operations": {
@@ -1388,6 +1461,65 @@
         ]
       }
     },
+    "event_compare": {
+      "summary": "overlay the average Z-score of several events: each one's mean/SEM trace, and its peak, latency, AUC and time bins side by side",
+      "parameters": [
+        {
+          "name": "events",
+          "type": "strs",
+          "required": false,
+          "default": null,
+          "choices": []
+        },
+        {
+          "name": "event_groups",
+          "type": "groups",
+          "required": false,
+          "default": null,
+          "choices": []
+        },
+        {
+          "name": "pre_s",
+          "type": "float",
+          "required": false,
+          "default": 15.0,
+          "choices": []
+        },
+        {
+          "name": "post_s",
+          "type": "float",
+          "required": false,
+          "default": 15.0,
+          "choices": []
+        },
+        {
+          "name": "bin_s",
+          "type": "float",
+          "required": false,
+          "default": 1.0,
+          "choices": []
+        }
+      ],
+      "tables": {
+        "traces": [
+          "Event",
+          "time_from_event_s",
+          "mean",
+          "sem",
+          "n"
+        ],
+        "summary": [
+          "Event",
+          "Occurrences",
+          "Trials",
+          "Peak Amplitude",
+          "Time-to-Peak (s)",
+          "Total AUC",
+          "Positive AUC",
+          "Negative AUC"
+        ]
+      }
+    },
     "peak_finder": {
       "summary": "statistically significant peaks: across the whole recording, or near events",
       "parameters": [
@@ -1547,6 +1679,47 @@
           "time_s"
         ]
       }
+    },
+    "recording_overview": {
+      "summary": "the whole recording's traces one above another (control, signal, control fit, dF/F) with the Z-score of the dF/F over the whole recording",
+      "parameters": [
+        {
+          "name": "signal",
+          "type": "str",
+          "required": false,
+          "default": "normalized",
+          "choices": []
+        },
+        {
+          "name": "method",
+          "type": "choice",
+          "required": false,
+          "default": "standard",
+          "choices": [
+            "standard",
+            "robust"
+          ]
+        },
+        {
+          "name": "max_points",
+          "type": "int",
+          "required": false,
+          "default": 0,
+          "choices": []
+        },
+        {
+          "name": "panels",
+          "type": "strs",
+          "required": false,
+          "default": null,
+          "choices": []
+        }
+      ],
+      "tables": {
+        "overview": [
+          "time_s"
+        ]
+      }
     }
   },
   "outputs": {
@@ -1690,7 +1863,8 @@
       "source",
       "source_path",
       "store",
-      "markers"
+      "markers",
+      "pipeline"
     ],
     "TDT": [
       "signals",

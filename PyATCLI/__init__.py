@@ -31,6 +31,9 @@ from .provenance import (
     read_record,
 )
 
+from .pipeline import PipelineOptions, defaults as pipeline_defaults, describe as describe_pipeline
+from .methods import methods_text
+
 from .sources.dataset import detect_format, detect_format_file, DataFormat, Dataset
 
 from .sources.load import load_dataset, load_dataset_file
@@ -68,12 +71,14 @@ from .analysis import (
     compute_event_zscore_peth,
     find_significant_peaks,
     find_peak_near_events,
+    peak_scan_summary,
     shuffle_null_near_events,
     compute_auc_from_trace,
     compute_auc_window,
     compute_auc_matrix,
     compute_peri_event_from_trace,
     compute_peri_event_matrix,
+    bin_ranges,
     GroupSpec,
     marker_index,
     common_markers,
@@ -85,6 +90,10 @@ from .analysis import (
     GroupResults,
     write_group_results,
     group_report_text,
+    pooled_subject_values,
+    summary_stats,
+    normal_qq,
+    significance_stars,
     default_subject_names,
     scan_recording,
     scan_recordings,
@@ -99,6 +108,8 @@ from .splice import (
     splice_keep_inside,
     splice_cut_out,
     replay_splices,
+    trim_range,
+    describe_duration,
     MODE_CUT_OUT,
     MODE_KEEP_INSIDE,
 )
@@ -163,6 +174,7 @@ from .fieldstudy.study import (
 from .fieldstudy.validation import (
     run_validation_pipeline,
     build_validation_summary,
+    validation_verdict,
     cohens_d,
     benjamini_hochberg,
     wordcount_controlled_regression,

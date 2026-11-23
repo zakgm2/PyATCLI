@@ -287,6 +287,22 @@ def leave_one_out_sensitivity(values, ids=None):
     }
 
 
+def validation_verdict(p_value_fdr, ci_lower):
+    """
+    A plain-language read of one pair's numbers, for a quick glance before the columns themselves are looked at (it is the "verdict" column of
+    build_validation_summary): "Likely a real effect" when the FDR-corrected p is under 0.05 and the bootstrap interval of the mean similarity clears
+    zero, "Weak/borderline - worth more subjects" under 0.10, "No evidence of an effect" otherwise, "Not enough data yet" when there is no p.
+    Not a substitute for p_value_fdr / cohens_d / ci_lower / ci_upper.
+    """
+    if p_value_fdr != p_value_fdr:                           # NaN
+        return "Not enough data yet"
+    if p_value_fdr < 0.05 and ci_lower > 0:
+        return "Likely a real effect"
+    if p_value_fdr < 0.10:
+        return "Weak/borderline — worth more subjects"
+    return "No evidence of an effect"
+
+
 def build_validation_summary(df, paired_fields, similarity_results, id_field="participant_id", n_boot=1000, rng_seed=None,
                              progress=None):
     """
@@ -336,6 +352,8 @@ def build_validation_summary(df, paired_fields, similarity_results, id_field="pa
         - n_flagged_loo : how many subjects were flagged by the
           leave-one-out check (0 is the reassuring result)
         - flagged_participant_ids : which ones, comma-separated
+        - verdict : validation_verdict(p_value_fdr, ci_lower), a plain-
+          language quick read of those two numbers
     """
     rows = []
     p_values = []
@@ -375,6 +393,7 @@ def build_validation_summary(df, paired_fields, similarity_results, id_field="pa
     p_fdr = benjamini_hochberg(np.array(p_values))
     for row, q in zip(rows, p_fdr):
         row["p_value_fdr"] = float(q)
+        row["verdict"] = validation_verdict(row["p_value_fdr"], row["ci_lower"])
 
     return pd.DataFrame(rows)
 

@@ -160,7 +160,8 @@ class Entry:
         Recording brings back), the names saved for its signals, and what the saved state restored."""
         result = self.wire(progress=progress)
         result.update(original_cache=encode(self.base, self.files) if self.initial_splices else None,
-                      signal_labels=dict(self.saved_labels), restored=dict(self.restored), regression_method=self.method)
+                      signal_labels=dict(self.saved_labels), restored=dict(self.restored), regression_method=self.method,
+                      pipeline=dict(self.base.get("pipeline") or {}))
         return result
 
 

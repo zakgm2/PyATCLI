@@ -204,6 +204,22 @@ class TestRun(CliCase):
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), self.assertRaises(pl.analyses.ParameterError):
             cli.main(["--debug", "run", "auc_window", self.oxy, "--out", self.out])
 
+    def test_several_events_are_compared_from_a_list_of_names_given_as_json_or_one_plain_name(self):
+        folder = make_tdt_folder(self.tmp, "Rat7-250101")
+        status, out, _ = run_cli("run", "event_compare", folder, "-p", 'events=["L1P¹","L1P⁰"]', "-p", "pre_s=2", "-p", "post_s=5",
+                                 "--out", os.path.join(self.tmp, "two"), "--json")
+        doc = json.loads(out)
+        self.assertEqual((status, doc["ok"], doc["result"]["kind"]), (0, True, "event_compare"))
+        self.assertEqual(doc["result"]["tables"]["summary"]["rows"], 2)
+        self.assertEqual(doc["result"]["parameters"]["events"], ["L1P¹", "L1P⁰"])
+        self.assertTrue(os.path.isfile(os.path.join(self.tmp, "two", "Rat7-250101_event_compare_traces.csv")))
+        status, out, _ = run_cli("run", "event_compare", folder, "-p", "events=L1P¹", "-p", "pre_s=2", "-p", "post_s=5",
+                                 "--out", os.path.join(self.tmp, "one"), "--json")
+        self.assertEqual((status, json.loads(out)["result"]["tables"]["summary"]["rows"]), (0, 1))          # a bare name is one name
+        status, _, err = run_cli("run", "event_compare", folder, "-p", "events=Nope", "--out", os.path.join(self.tmp, "none"))
+        self.assertEqual(status, 1)
+        self.assertIn("no event named 'Nope'", err)
+
     def test_a_tdt_folder_uses_its_saved_splices_unless_told_not_to(self):
         folder = make_tdt_folder(self.tmp, "Rat7-250101")
         os.makedirs(os.path.join(folder, "JSON saves"))

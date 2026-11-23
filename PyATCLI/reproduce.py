@@ -31,6 +31,7 @@ from .analyses import AnalysisResult, GROUP_KIND, VIEW_KIND, fill_legacy, kinds,
 from .sources.load import load_dataset_file
 from .sources.tables import load_any_file
 from .sources.processing_TDT import process_tdt_folder
+from .pipeline import PipelineOptions
 from .recording import apply_signal_labels, apply_splices, make_generic_cache, make_oxysoft_cache, make_tdt_cache
 
 DEFAULT_TOLERANCE = 1e-4          # |a - b| <= tolerance * (1 + |b|): looser than the digits an export keeps, tighter than any real change
@@ -92,10 +93,12 @@ def load_recording_for_record(record, path, progress=None):
     state = record.get("recording") or {}
     source_type = state.get("source_type")
     method = state.get("regression_method") or "ols"
+    options = PipelineOptions(state.get("pipeline"))                     # (a record from before the options existed has none: the defaults it was made with)
     if source_type == "TDT":
-        cache = make_tdt_cache(path, process_tdt_folder(path, regression_method=method, progress=progress))
+        cache = make_tdt_cache(path, process_tdt_folder(path, regression_method=method, progress=progress, options=options), options=options)
     elif source_type == "Oxysoft":
         cache = make_oxysoft_cache(path, load_dataset_file(path, progress=progress))
+        cache["pipeline"] = options.to_dict()
     elif source_type == "Generic":
         g = state.get("generic") or {}
         tables = load_any_file(path, progress=progress)
@@ -106,6 +109,7 @@ def load_recording_for_record(record, path, progress=None):
         if missing:
             raise ReproduceError(f"{os.path.basename(path)}: column(s) {missing} are gone from table {table.name!r}")
         cache = make_generic_cache(path, table, table.headers.index(g["x_column"]), [table.headers.index(c) for c in g["y_columns"]])
+        cache["pipeline"] = options.to_dict()
     else:
         raise ReproduceError(f"Don't know how to rebuild a {source_type!r} recording")
     splices = state.get("splices") or []
@@ -121,7 +125,9 @@ def load_recording_for_record(record, path, progress=None):
 # ---------------------------------------------------------------------------
 
 def _is_blank(v):
-    return v is None or (isinstance(v, float) and np.isnan(v)) or (isinstance(v, str) and v.strip() == "")
+    """No value: missing, NaN, an empty cell, or the text "nan" (what an export that formats its numbers writes for a NaN, such as the mean of
+    a time bin that holds no samples)."""
+    return v is None or (isinstance(v, float) and np.isnan(v)) or (isinstance(v, str) and v.strip().lower() in ("", "nan"))
 
 
 _NUMBER = re.compile(r"\s*[+-]?(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?\s*")
@@ -274,7 +280,7 @@ def reproduce(record, recording=None, out_dir=None, compare=(), tolerance=DEFAUL
         written = write_result(result, out_dir, stem)
         rec = provenance.build_record(
             kind, result.parameters, source=provenance.file_fingerprint(path), recording=state,
-            pipeline=provenance.pipeline_parameters(state.get("regression_method") or "ols"),
+            pipeline=provenance.pipeline_parameters(state.get("regression_method") or "ols", state.get("pipeline")),
             outputs=written, notes=[f"reproduced from a record made {record.get('created', '?')}"] + warnings)
         written.append(provenance.write_record(os.path.join(out_dir, f"{stem}.provenance.json"), rec))
     return Reproduction(record, result, warnings, written, _compare(compare, result, tolerance, rounded))

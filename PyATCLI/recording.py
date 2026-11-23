@@ -37,6 +37,7 @@ import numpy as np
 
 from .markers import group_markers_by_name  # noqa: F401 — re-exported: the usual next step after loading
 from .sources.processing_TDT import compute_dff, process_tdt_folder, validate_tdt_folder
+from .pipeline import PipelineOptions, register_step, sentence as methods_sentence
 from .progress import Plan
 from .splice import MODE_CUT_OUT, MODE_KEEP_INSIDE, splice_cut_out, splice_keep_inside
 
@@ -44,15 +45,31 @@ from .splice import MODE_CUT_OUT, MODE_KEEP_INSIDE, splice_cut_out, splice_keep_
 # or renaming one is a breaking change, see engine/contract.py). There are more (a TDT recording also holds the pieces it was built from, an Oxysoft
 # one its fit factor, any of them the highlights and text boxes once there are some), and more can be added.
 CACHE_KEYS = {
-    "always": ["x", "fs", "source", "source_path", "store", "markers"],
+    "always": ["x", "fs", "source", "source_path", "store", "markers", "pipeline"],
     "TDT": ["signals", "corr", "raw", "detected_markers", "motion_correction_inlier_fraction"],
     "Oxysoft": ["o2hb", "hhb", "detected_markers"],
     "Generic": ["x_label", "y_columns"],
 }
 
+register_step("splice", "Splices", 35)                  # no options: a step of the pipeline that only has a sentence in the methods
+
+
+@methods_sentence("splice")
+def _splice_sentence(options, state):
+    parts = []
+    for s in state.get("splices") or []:
+        parts.append(f"{s['start']:g}-{s['end']:g} s was cut out" if s.get("mode") == MODE_CUT_OUT else f"only {s['start']:g}-{s['end']:g} s was kept")
+    if not parts:
+        return None
+    again = " and the dF/F was computed again on the samples that remained" if state.get("source_type") in (None, "TDT") else ""
+    return "The recording was spliced: " + ", then ".join(parts) + again
+
+
 SAVES_FOLDER = "JSON saves"
 HIGHLIGHTS_FILE = "highlights.json"
 TEXT_ANNOTATIONS_FILE = "text_annotations.json"
+PIPELINE_FILE = "pipeline.json"
+PIPELINE_SCHEMA = 1
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +139,41 @@ def read_saved_signal_labels(source_path):
     if not isinstance(saved, dict):
         raise ValueError("signal_labels.json does not hold an object of names")
     return {str(k): str(v) for k, v in saved.items()}
+
+
+def pipeline_sidecar_path(source_path):
+    """Where the pipeline options chosen for the recording are saved (pipeline.json, in JSON saves/): not there when every option is its default."""
+    return annotation_sidecar_path(source_path, PIPELINE_FILE)
+
+
+def read_saved_pipeline(source_path):
+    """{option name: value} of the pipeline options saved for the recording ({} if none): a dict, each name and value checked against the registry (pipeline.py).
+    `ValueError` if the file is not one the registry accepts."""
+    path = pipeline_sidecar_path(source_path)
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        saved = json.load(f)
+    if not isinstance(saved, dict) or not isinstance(saved.get("options"), dict):
+        raise ValueError("pipeline.json does not hold {\"schema\": 1, \"options\": {name: value}}")
+    if saved.get("schema", PIPELINE_SCHEMA) > PIPELINE_SCHEMA:
+        raise ValueError(f"pipeline.json uses layout {saved['schema']}; this library reads up to {PIPELINE_SCHEMA}")
+    return PipelineOptions(saved["options"]).to_dict()
+
+
+def resolve_pipeline(source_path, explicit=None, use_saved=True):
+    """(PipelineOptions, warnings): the options a recording is processed with — the defaults, then what is saved for it (JSON saves/pipeline.json, unless
+    `use_saved` is False), then `explicit` (a dict of option names and values, or a PipelineOptions) on top. An explicit value that is not allowed is a ValueError;
+    a saved file that cannot be read is a warning, and the recording is processed without it."""
+    warnings, values = [], {}
+    if use_saved:
+        try:
+            values.update(read_saved_pipeline(source_path))
+        except Exception as e:                                # noqa: BLE001 - an unreadable file must not stop the load
+            warnings.append(f"Saved pipeline options could not be read ({e}); the defaults are used.")
+    if explicit is not None:
+        values.update(explicit.to_dict() if isinstance(explicit, PipelineOptions) else dict(explicit))
+    return PipelineOptions(values), warnings
 
 
 def read_saved_annotations(source_path, filename):
@@ -214,11 +266,14 @@ def build_signal_options(result):
     return options
 
 
-def make_tdt_cache(folder_path, result, signals=None):
+def make_tdt_cache(folder_path, result, signals=None, options=None):
     """The cache for a freshly processed TDT folder (`result` is process_tdt_folder's return value),
     before any splice or saved marker. `signals` replaces the default build_signal_options(result)
-    (the app passes its own, with colours added)."""
+    (the app passes its own, with colours added). `options` are the pipeline options the folder was
+    processed with (pipeline.py), kept in the cache so a splice, an analysis and a provenance record
+    use and say the same ones."""
     return {
+        'pipeline':         PipelineOptions.from_dict(options).to_dict(),
         'source':           'TDT',
         'source_path':      folder_path,
         'store':            os.path.basename(folder_path.rstrip('/\\')),
@@ -342,8 +397,8 @@ def apply_splice(source_cache, mode, start, end, regression_method="ols", progre
         if 'main_driver' in result['extra_channels']:
             y_465 = result['extra_channels']['main_driver']
             y_415 = result['extra_channels'].get('isosbestic')
-            computed = compute_dff(y_465, y_415, source_cache['fs'],
-                                   regression_method=regression_method, progress=progress)
+            computed = compute_dff(y_465, y_415, source_cache['fs'], regression_method=regression_method, progress=progress,
+                                   options=source_cache.get('pipeline'), x=result['x'])
             raw_out, corr_out = computed['raw'], computed['corr']
             inlier_fraction = computed.get('motion_correction_inlier_fraction')
         else:
@@ -444,7 +499,7 @@ def apply_splices(cache, splices, regression_method="ols", progress=None):
 # Loading
 # ---------------------------------------------------------------------------
 
-def load_tdt_recording(folder_path, regression_method="ols", use_saved=True, progress=None):
+def load_tdt_recording(folder_path, regression_method="ols", use_saved=True, progress=None, pipeline=None):
     """Loads a TDT block the way the app does: processed to dF/F, the recording's saved splices
     replayed (each re-fits the dF/F), then its saved markers put on top. Nothing is written.
 
@@ -454,6 +509,9 @@ def load_tdt_recording(folder_path, regression_method="ols", use_saved=True, pro
         False skips the JSON saves/ folder entirely (the recording exactly as recorded).
     progress : None, True or callable(fraction, message)
         See PyATCLI.progress.
+    pipeline : dict, PipelineOptions or None
+        Pipeline options (pipeline.py) to process the recording with, {name: value}: on top of
+        what is saved for it, which is on top of the defaults.
 
     Returns
     -------
@@ -470,15 +528,16 @@ def load_tdt_recording(folder_path, regression_method="ols", use_saved=True, pro
     if not valid:
         raise ValueError(message)
 
+    options, option_warnings = resolve_pipeline(folder_path, pipeline, use_saved)
     result = process_tdt_folder(folder_path, regression_method=regression_method,
-                                progress=plan.sub("Reading and processing"))
-    cache = make_tdt_cache(folder_path, result)
+                                progress=plan.sub("Reading and processing"), options=options)
+    cache = make_tdt_cache(folder_path, result, options=options)
     original_cache, applied, warnings = None, [], []
     if use_saved:
         cache, original_cache, applied, warnings = _restore_saved_state(
             cache, folder_path, regression_method, progress=plan.sub("Applying saved splices"))
     plan.done()
-    return {"cache": cache, "original_cache": original_cache, "splices": applied, "warnings": warnings}
+    return {"cache": cache, "original_cache": original_cache, "splices": applied, "warnings": option_warnings + warnings}
 
 
 def _restore_saved_state(cache, source_path, regression_method, progress=None):
@@ -515,21 +574,22 @@ def _restore_saved_state(cache, source_path, regression_method, progress=None):
     return cache, original, applied, warnings
 
 
-def load_recording(path, regression_method="ols", use_saved=True, table=None, x_column=None, y_columns=None, progress=None):
+def load_recording(path, regression_method="ols", use_saved=True, table=None, x_column=None, y_columns=None, progress=None, pipeline=None):
     """Opens any recording the app can: a TDT folder, an Oxysoft .txt export, or a generic table file, the way
     the app does — with its saved splices replayed and its saved markers on top (`use_saved=False` skips both).
     Returns what load_tdt_recording returns: {"cache", "original_cache", "splices", "warnings"}.
 
     For a generic file (Excel, CSV, TSV, text) `table` names which of its tables to open (needed only if it has
     more than one), `x_column` its x column (default the first) and `y_columns` the traces (default every other
-    column). `regression_method` matters for TDT only. Raises ValueError with what is wrong if the path is
-    not a recording it can open."""
+    column). `regression_method` matters for TDT only. `pipeline` is {option name: value} for the pipeline's options (pipeline.py), on
+    top of what is saved for the recording: the processing options matter for TDT only, the smoothing and the z-score baseline to every
+    source's analyses. Raises ValueError with what is wrong if the path is not a recording it can open."""
     from .sources.dataset import DataFormat, detect_format_file
     from .sources.load import load_dataset_file
     from .sources.tables import load_any_file
 
     if os.path.isdir(path):
-        return load_tdt_recording(path, regression_method=regression_method, use_saved=use_saved, progress=progress)
+        return load_tdt_recording(path, regression_method=regression_method, use_saved=use_saved, progress=progress, pipeline=pipeline)
     if not os.path.isfile(path):
         raise ValueError(f"{path} does not exist")
     if detect_format_file(path) == DataFormat.OXYSOFT:
@@ -549,10 +609,12 @@ def load_recording(path, regression_method="ols", use_saved=True, table=None, x_
             raise ValueError(f"column(s) {bad} are not in table {chosen.name!r}; its columns: {', '.join(headers)}")
         y_idx = [headers.index(c) for c in y_columns] if y_columns else None
         cache = make_generic_cache(path, chosen, headers.index(x_name), y_idx)
+    options, option_warnings = resolve_pipeline(path, pipeline, use_saved)
+    cache["pipeline"] = options.to_dict()
     if not use_saved:
-        return {"cache": cache, "original_cache": None, "splices": [], "warnings": []}
+        return {"cache": cache, "original_cache": None, "splices": [], "warnings": option_warnings}
     cache, original, applied, warnings = _restore_saved_state(cache, path, regression_method, progress)
-    return {"cache": cache, "original_cache": original, "splices": applied, "warnings": warnings}
+    return {"cache": cache, "original_cache": original, "splices": applied, "warnings": option_warnings + warnings}
 
 
 # ---------------------------------------------------------------------------

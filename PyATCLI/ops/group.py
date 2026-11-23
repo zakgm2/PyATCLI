@@ -9,6 +9,7 @@ from ..analysis import group as design
 from ..analysis.group import GroupSpec
 from ..analysis.group.run import GROUP_SETTINGS_FILENAME, read_group_settings, write_group_settings
 from ..analysis.group.scan import default_subject_names, scan_recordings
+from ..pipeline import PipelineOptions
 from ..sources.processing_TDT import REGRESSION_METHODS
 from . import OpError, operation
 from .analysis import _where
@@ -91,11 +92,15 @@ def _marker_rows(scans):
 @operation("group.setup", "set up a group analysis as the wizard does: find the recordings, list their markers, check the design, write the settings")
 def group_setup(ctx, *, folders, name, markers=None, exclude=None, store_labels=None, pre=design.DEFAULT_PRE, post=design.DEFAULT_POST,
                 baseline=design.DEFAULT_BASELINE, response=design.DEFAULT_RESPONSE, signal="dff", smooth=0.5, measures=None,
-                peak_direction="absolute", decay_fraction=0.5, correction="holm", alpha=0.05, regression="ols", out=None,
+                peak_direction="absolute", decay_fraction=0.5, correction="holm", alpha=0.05, regression="ols", pipeline=None, out=None,
                 output_folder=None, run=False):
     out, output_folder = _where(out, output_folder)
     if regression not in REGRESSION_METHODS:
         raise OpError(f"regression must be one of {', '.join(REGRESSION_METHODS)}, not {regression!r}", "bad_parameter")
+    try:
+        options = PipelineOptions.from_dict(pipeline).changed() if pipeline else {}          # (every recording is processed with these, on top of what it has saved)
+    except ValueError as e:
+        raise OpError(str(e), "bad_parameter")
     found = []
     for path in folders:
         found += [os.path.abspath(f) for f in recordings_under(path)]
@@ -128,7 +133,7 @@ def group_setup(ctx, *, folders, name, markers=None, exclude=None, store_labels=
     spec = GroupSpec(group_name=name, subjects=[{"subject": sc["subject"], "folder": sc["folder"]} for sc in chosen], markers=list(markers),
                      store_labels=store_labels, pre=pre, post=post, baseline=tuple(baseline), response=tuple(response), signal=signal,
                      smooth_seconds=smooth, metrics=list(measures or design.METRICS), peak_direction=peak_direction,
-                     decay_fraction=decay_fraction, correction=correction, alpha=alpha, regression_method=regression)
+                     decay_fraction=decay_fraction, correction=correction, alpha=alpha, regression_method=regression, pipeline=options)
     problems = spec.problems()
     if problems:
         raise OpError(" ".join(problems), "invalid_input")

@@ -30,7 +30,7 @@ def _write_result(ctx, result, cache, path, stem, out, output_folder, load, spli
     record = provenance.build_record(
         result.kind, result.parameters, source=provenance.file_fingerprint(path),
         recording=provenance.recording_state(cache, method, splices, signal=result.parameters.get("signal")),
-        pipeline=provenance.pipeline_parameters(method), app=ctx.app, outputs=written, notes=result.notes)
+        pipeline=provenance.pipeline_parameters(method, cache.get("pipeline")), app=ctx.app, outputs=written, notes=result.notes)
     written.append(provenance.write_record(os.path.join(out, f"{stem}.provenance.json"), record))
     for f in written:
         ctx.written(f)

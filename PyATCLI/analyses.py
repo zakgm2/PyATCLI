@@ -21,9 +21,11 @@ The analyses (describe_kinds() lists them with every parameter):
     fft_window       spectrum and top peaks of a window (FFT)
     curve_fit        fit a model to the stretch between two times (Curve Fit)
     event_peth       every occurrence of one event aligned to it: trials, mean/SEM, AUC, peak, bins (Event PETH)
+    event_compare    the average Z-score of several events overlaid: each one's mean/SEM trace, peak, latency, AUC, bins (Compare Events)
     peak_finder      statistically significant peaks (Find Significant Peaks)
     event_intervals  time between markers (Measure Intervals)
     process          the processed traces themselves (dF/F and the raw channels)
+    recording_overview  the whole recording's traces one above another, with the Z-score of the dF/F over the whole recording (Recording Overview)
 
 Group analysis is the one analysis that is not a function of one recording: it runs from a GroupSpec over
 several (run_group_from_spec below, analysis/group/run.py's run_group_analysis, `python -m PyATCLI group`).
@@ -40,11 +42,14 @@ import pandas as pd
 
 from .analysis import (
     compute_auc_from_trace, compute_auc_matrix, compute_auc_window, compute_event_zscore_peth, compute_fft_slice,
-    compute_group_stats, compute_marker_intervals, compute_peri_event_from_trace, compute_peri_event_matrix,
+    bin_ranges, compute_group_stats, compute_marker_intervals, compute_peri_event_from_trace, compute_peri_event_matrix,
     DEFAULT_SHUFFLES, DEFAULT_START_BUFFER_S, find_fft_peaks, find_peak_near_events, find_significant_peaks, fit_model_to_segment,
-    get_zscore_slice, holm_adjust, mean_channels, shuffle_null_near_events, smooth_signal,
+    get_zscore_slice, holm_adjust, mean_channels, peak_scan_summary, shuffle_null_near_events,
 )
 from .analysis.group import GroupSpec
+from .analysis.shared import smooth_for
+from .pipeline import options_of
+from .analysis.zscore_peth import _baseline_mean_std
 from .analysis.group.report import trace_frame
 from .analysis.group.run import GROUP_SETTINGS_FILENAME, run_group_analysis
 from .markers import group_markers_by_name
@@ -80,7 +85,7 @@ NO_LEGACY = object()               # Param.legacy of a parameter that has always
 @dataclass(frozen=True)
 class Param:
     name: str
-    type: str                       # float | int | str | bool | floats | ints | markers | groups | choice
+    type: str                       # float | int | str | bool | floats | ints | strs | markers | groups | choice
     default: object = None
     required: bool = False
     doc: str = ""
@@ -129,6 +134,10 @@ TABLES = {
         "peak": ["Trial", "Trial Event Time (s)", "Peak Amplitude", "Time-to-Peak (s)", "Checked"],
         "bins": ["Trial", "Trial Event Time (s)", "Checked"],                       # (and a "Bin a-bs Mean" column per time bin)
     },
+    "event_compare": {
+        "traces": ["Event", "time_from_event_s", "mean", "sem", "n"],
+        "summary": ["Event", "Occurrences", "Trials", "Peak Amplitude", "Time-to-Peak (s)", "Total AUC", "Positive AUC", "Negative AUC"],  # (and a "Bin a-bs Mean" column per time bin)
+    },
     "peak_finder": {                                                                 # which tables there are depends on `scope`
         "peaks": ["time_s", "z_score", "kind"],                                      # whole
         "alignment": ["Event Time (s)", "Found", "Latency (s)", "Z-score"],          # one_event, all_same_name, scan_all
@@ -136,6 +145,9 @@ TABLES = {
     },
     "event_intervals": {
         "intervals": ["time_s", "store", "label", "phase", "dt_since_prev_same_store_s", "dt_since_prev_any_s"],
+    },
+    "recording_overview": {
+        "overview": ["time_s"],                                       # (and a column per panel: Control, Signal, Control Fit, Z-Score, dF/F for TDT)
     },
     "process": {
         "trace": ["time_s"],                                                         # (and a column per signal)
@@ -232,6 +244,10 @@ def _coerce(p, value):
             if isinstance(value, str):
                 value = [v for v in re.split(r"[,\s]+", value.strip()) if v]
             return [int(v) for v in value]
+        if p.type == "strs":                      # names, which can hold commas: a list, or one name as plain text (never split)
+            if isinstance(value, str):
+                value = [value]
+            return [str(v) for v in value]
         if p.type == "choice":
             if value not in p.choices:
                 raise ValueError(f"must be one of {', '.join(map(str, p.choices))}")
@@ -332,10 +348,10 @@ _POST = Param("post_s", "float", DEFAULT_WINDOW_S, doc="seconds after the point"
           [Param("center_s", "float", required=True, doc="the time the window is centred on"), _PRE, _POST, _SIGNAL])
 def _zscore_window(ctx, p):
     cache, center = ctx.cache, p["center_s"]
-    x, fs = cache["x"], cache["fs"]
+    x = cache["x"]
     rows, peaks, notes = [], [], []
     for label, y in signal_channels(cache, p["signal"]):
-        slice_x, z = get_zscore_slice(x, smooth_signal(y, fs), center, pre=p["pre_s"], post=p["post_s"])
+        slice_x, z = get_zscore_slice(x, smooth_for(cache, y), center, pre=p["pre_s"], post=p["post_s"], options=options_of(cache))
         if z is None or len(z) == 0:
             notes.append(f"{label}: no samples in this window")
             continue
@@ -467,8 +483,8 @@ def _event_peth(ctx, p):
     times = _event_times(ctx, p["event"], p["event_times"])
     ctx.resolved["event_times"] = [float(t) for t in times]
     _, _, y = normalized_signal(cache)
-    clean = smooth_signal(y, cache["fs"])
-    res = compute_event_zscore_peth(cache["x"], clean, times, pre, post, progress=ctx.progress)
+    clean = smooth_for(cache, y)
+    res = compute_event_zscore_peth(cache["x"], clean, times, pre, post, progress=ctx.progress, options=options_of(cache))
     matrix, axis, trial_times = res["trial_matrix"], res["time_axis"], res["trial_event_times"]
     n_total = matrix.shape[0]
     if n_total == 0:
@@ -498,7 +514,7 @@ def _event_peth(ctx, p):
     peak_rows = [[i + 1, float(t), q["peak_amplitude"], q["latency"], i in checked] for i, (t, q) in enumerate(zip(trial_times, per_peri))]
     peak_rows.append([GROUP, None, g_peri["peak_amplitude"], g_peri["latency"], None])
     edges = per_peri[0]["mean_bins"]
-    bin_cols = [f"Bin {b['bin_start']:.1f}-{b['bin_end']:.1f}s Mean" for b in edges]
+    bin_cols = [f"Bin {r}s Mean" for r in bin_ranges(edges)]
     bin_rows = [[i + 1, float(t)] + [b["mean"] for b in q["mean_bins"]] + [i in checked] for i, (t, q) in enumerate(zip(trial_times, per_peri))]
     g_bins = [b["mean"] for b in g_peri["mean_bins"]]
     bin_rows.append([GROUP, None] + g_bins + [None] * (len(edges) - len(g_bins)) + [None])
@@ -516,6 +532,61 @@ def _event_peth(ctx, p):
     notes = [f"{len(times) - n_total} of {len(times)} occurrences were too close to the recording's edges and were skipped"] \
         if n_total < len(times) else []
     return tables, summary, notes
+
+
+@analysis("event_compare", "overlay the average Z-score of several events: each one's mean/SEM trace, and its peak, latency, AUC and time bins side by side",
+          [Param("events", "strs", None, doc="the events' names as listed (default: every event in the recording)"),
+           Param("event_groups", "groups", None, doc="use these {event name: times} instead of looking the events up (what a record stores)"),
+           _PRE, _POST,
+           Param("bin_s", "float", 1.0, doc="width of the post-event mean-time bins")])
+def _event_compare(ctx, p):
+    """Each event as event_peth does it (every occurrence z-scored against its own baseline, all usable trials averaged), so an event's
+    numbers here are its `GROUP` row there with every trial checked; the events are only put side by side."""
+    cache = ctx.cache
+    pre, post, bin_s = p["pre_s"], p["post_s"], max(0.01, p["bin_s"])
+    if pre <= 0 or post <= 0:
+        raise ParameterError("pre_s and post_s must be positive")
+    groups = p["event_groups"] if p["event_groups"] is not None else group_markers_by_name(cache, ctx.store_labels)
+    names = list(dict.fromkeys(p["events"])) if p["events"] is not None else sorted(groups)
+    if not names:
+        raise ParameterError("events: there are no events to compare")
+    unknown = [n for n in names if n not in groups]
+    if unknown:
+        shown = ", ".join(sorted(groups)[:20]) + (" ..." if len(groups) > 20 else "")
+        raise ParameterError(f"events: no event named {unknown[0]!r} in this recording; it has: {shown or 'none'}")
+    ctx.resolved["events"] = names
+    ctx.resolved["event_groups"] = {n: [float(t) for t in groups[n]] for n in names}
+    _, _, y = normalized_signal(cache)
+    clean = smooth_for(cache, y)
+    plan = Plan(ctx.progress, [(n, 1) for n in names])
+    trace_rows, summary_rows, notes, edges = [], [], [], None
+    for name in names:
+        times = sorted(float(t) for t in groups[name])
+        res = compute_event_zscore_peth(cache["x"], clean, times, pre, post, progress=plan.sub(name), options=options_of(cache))
+        matrix, axis = res["trial_matrix"], res["time_axis"]
+        n = matrix.shape[0]
+        if n == 0:
+            notes.append(f"{name}: no usable trial (all {len(times)} occurrence(s) too close to the start/end of the recording for this window), left out")
+            continue
+        if n < len(times):
+            notes.append(f"{name}: {len(times) - n} of {len(times)} occurrences were too close to the recording's edges and were skipped")
+        mean, sem = compute_group_stats(matrix)
+        auc = compute_auc_from_trace(axis, mean)
+        peri = compute_peri_event_from_trace(axis, mean, post, bin_s)
+        edges = edges or peri["mean_bins"]
+        trace_rows += [[name, float(t), float(m), float(s), n] for t, m, s in zip(axis, mean, sem)]
+        summary_rows.append([name, len(times), n, peri["peak_amplitude"], peri["latency"], auc["total_auc"], auc["positive_auc"], auc["negative_auc"]]
+                            + [b["mean"] for b in peri["mean_bins"]])
+    if not summary_rows:
+        raise AnalysisError("No usable trials for any of these events — all their occurrences were too close to the start/end of the recording "
+                            "for the current window.")
+    bin_cols = [f"Bin {r}s Mean" for r in bin_ranges(edges)]
+    tables = {
+        "traces": _frame(["Event", "time_from_event_s", "mean", "sem", "n"], trace_rows),
+        "summary": _frame(["Event", "Occurrences", "Trials", "Peak Amplitude", "Time-to-Peak (s)", "Total AUC", "Positive AUC", "Negative AUC"] + bin_cols,
+                          summary_rows),
+    }
+    return tables, {"n_events": len(summary_rows), "n_trials": sum(r[2] for r in summary_rows)}, notes
 
 
 @analysis("peak_finder", "statistically significant peaks: across the whole recording, or near events",
@@ -539,7 +610,7 @@ def _event_peth(ctx, p):
 def _peak_finder(ctx, p):
     cache = ctx.cache
     _, _, y = normalized_signal(cache)
-    clean = smooth_signal(y, cache["fs"])
+    clean = smooth_for(cache, y)
     x, scope, thr, tr = cache["x"], p["scope"], p["z_threshold"], p["include_troughs"]
     shuffles, seed = p["n_shuffles"], p["seed"]
     if p["start_buffer_s"] < 0:
@@ -550,11 +621,12 @@ def _peak_finder(ctx, p):
     notes = []
 
     def search(times, label, progress_search=None, progress_null=None):
-        results = find_peak_near_events(x, clean, times, p["pre_s"], p["post_s"], z_threshold=thr, include_troughs=tr, progress=progress_search)
+        results = find_peak_near_events(x, clean, times, p["pre_s"], p["post_s"], z_threshold=thr, include_troughs=tr, progress=progress_search,
+                                        options=options_of(cache))
         null = None
         if shuffles:
             null = shuffle_null_near_events(x, clean, times, p["pre_s"], p["post_s"], z_threshold=thr, include_troughs=tr,
-                                            n_shuffles=shuffles, seed=seed, progress=progress_null)
+                                            n_shuffles=shuffles, seed=seed, progress=progress_null, options=options_of(cache))
             if not null["available"]:
                 notes.append(f"{label}: no chance level could be measured, {null['reason']}")
         return results, null
@@ -597,21 +669,14 @@ def _peak_finder(ctx, p):
     by_event, nulls = {}, {}
     for name, t in groups.items():
         by_event[name], nulls[name] = search(t, name, progress_null=plan.sub(name) if shuffles else None)
-    scan = []
-    for name, results in by_event.items():
-        found = [r for r in results if r["found"]]
-        row = [name, len(results), len(found), len(found) / len(results) if results else 0.0,
-               sum(r["z_score"] for r in found) / len(found) if found else None]
-        if shuffles:
-            null = nulls[name]
-            row += [null["chance_hit_rate"], null["p_count"]] if null["available"] else [None, None]
-        scan.append(row)
     scan_cols = ["Event", "Occurrences", "Found", "Hit Rate", "Avg Z (found only)"]
+    held = None
     if shuffles:                                              # p across the event types looked at: Holm, as in the group analysis
-        for row, adjusted in zip(scan, holm_adjust([row[6] for row in scan])):
-            row.append(adjusted)
+        adjusted = holm_adjust([null["p_count"] if null["available"] else None for null in nulls.values()])
+        held = {name: dict(null, p_count_holm=p) for (name, null), p in zip(nulls.items(), adjusted)}
         scan_cols += ["Chance Hit Rate", "p (shuffle)", "p (Holm)"]
-    scan.sort(key=lambda r: r[3], reverse=True)
+    scan = [[r["event"], r["occurrences"], r["found"], r["hit_rate"], r["avg_z"]] + ([r["chance_hit_rate"], r["p_shuffle"], r["p_holm"]] if shuffles else [])
+            for r in peak_scan_summary(by_event, held)]       # the same rows, in the same order, as the engine's compute.peaks gives PyAT's window
     detail = [[name] + row for name, results in by_event.items() for row in align_rows(results, nulls[name])]
     return ({"scan": _frame(scan_cols, scan), "alignment": _frame(["Event"] + ALIGN, detail)},
             {"n_event_types": len(by_event)}, notes)
@@ -655,6 +720,110 @@ def _process(ctx, p):
         cols = {"signal": normalized_signal(cache)[2]}
     table = pd.DataFrame({"time_s": as_float64(cache["x"]), **cols})
     return {"trace": table}, {"n_samples": len(table), "columns": list(cols)}, []
+
+
+def _whole_zscore(y, method):
+    """(z, mean, SD): `y` z-scored over the whole recording. "standard" takes the mean and SD of every sample; "robust" the baseline rule the
+    other analyses use (samples further than 5 robust SDs from the median are pulled in to that limit first, so a few large transients do not
+    shrink every other z-score). A flat trace has no scale: its z-score is 0 (SD 0). Samples that are NaN stay NaN."""
+    y = as_float64(y)
+    finite = y[np.isfinite(y)]
+    if not finite.size:
+        return np.full_like(y, np.nan), float("nan"), float("nan")
+    mu, sd = _baseline_mean_std(finite) if method == "robust" else (np.mean(finite), np.std(finite))
+    mu, sd = float(mu), float(sd)
+    if sd == 0 or sd <= 1e-12 * float(np.max(np.abs(finite))):
+        return np.zeros_like(y), mu, 0.0
+    return (y - mu) / sd, mu, sd
+
+
+def _extreme_rows(arrays, max_points):
+    """The rows to keep so the arrays have about `max_points` rows between them: the rows are cut into stretches, and the lowest and the highest
+    sample of every array in every stretch is kept (plus the first and last row), so no peak or dip is lost. Everything if `max_points` is 0 or
+    the arrays are no longer than it. A slice or a sorted array of row numbers."""
+    n = len(arrays[0])
+    if max_points <= 0 or n <= max_points:
+        return slice(None)
+    stretches = max(1, max_points // (2 * len(arrays)))
+    edges = np.linspace(0, n, stretches + 1, dtype=np.int64)
+    rows = {0, n - 1}
+    for a in arrays:
+        a = np.asarray(a, dtype=float)
+        for lo, hi in zip(edges[:-1], edges[1:]):
+            if hi > lo:
+                part = a[lo:hi]
+                rows.add(int(lo) + int(np.argmin(part)))
+                rows.add(int(lo) + int(np.argmax(part)))
+    return np.array(sorted(rows), dtype=np.int64)
+
+
+@analysis("recording_overview", "the whole recording's traces one above another (control, signal, control fit, dF/F) with the Z-score of the dF/F over the whole recording",
+          [_SIGNAL,
+           Param("method", "choice", "standard", choices=("standard", "robust"),
+                 doc="standard: (x - mean) / SD of the whole trace; robust: the same with the mean and SD taken after samples further than 5 robust SDs "
+                     "from the median are pulled in to that limit (the rule the other analyses use for a baseline), so a few large transients do not shrink every z-score"),
+           Param("max_points", "int", 0, doc="0: every sample; otherwise about this many rows in all: the recording is cut into stretches and the lowest and "
+                                             "highest sample of every trace in each is kept, so every peak and dip stays (for drawing; the Z-score is taken over every sample)"),
+           Param("panels", "strs", None, doc="which panels to keep, in the order to keep them (default: all, in the order of the recording): for a TDT recording "
+                                             "Control, Signal, Control Fit, Z-Score, ΔF/F; for any other, each channel and Z-Score (<channel>). The Z-score is "
+                                             "taken whichever are kept")])
+def _recording_overview(ctx, p):
+    """A TDT recording gives Control (the isosbestic stream), Signal (the main driver), Control Fit (the control as fitted to the signal, what motion
+    correction subtracts), Z-Score (of `signal`, the dF/F unless asked otherwise) and ΔF/F; any other recording gives each of its channels (what the
+    click analyses use) and the Z-Score of each, named "Z-Score (<channel>)". `panels` keeps only some of them, in the order given."""
+    cache = ctx.cache
+    signals = cache.get("signals")
+    method = p["method"]
+    cols, scored = {}, {}
+    if signals:
+        key = p["signal"]
+        if key not in signals:
+            raise ParameterError(f"signal: no signal {key!r}; the recording has {', '.join(signals)}")
+        iso, driver, dff = signals.get("isosbestic"), signals.get("main_driver"), signals.get("normalized")
+        if iso is not None:
+            cols["Control"] = iso["y"]
+        if driver is not None:
+            cols["Signal"] = driver["y"]
+        if iso is not None and driver is not None and "raw" in cache and len(cache["raw"]) == len(driver["y"]):
+            cols["Control Fit"] = as_float64(driver["y"]) - as_float64(cache["raw"])
+        scored["Z-Score"] = signals[key]["y"]
+        if dff is not None:
+            cols["ΔF/F"] = dff["y"]
+    else:
+        channels = list(cache["y_columns"].items()) if cache.get("y_columns") else signal_channels(cache)
+        for label, y in channels:
+            cols[str(label)] = y
+            scored[f"Z-Score ({label})"] = y
+    zscores, stats = {}, []
+    for name, y in scored.items():
+        z, mu, sd = _whole_zscore(y, method)
+        zscores[name] = z
+        stats.append((name, mu, sd))
+    if signals:                                                       # Z-Score sits between the fit and the dF/F, as the panels read
+        ordered = {k: v for k, v in cols.items() if k != "ΔF/F"}
+        ordered.update(zscores)
+        if "ΔF/F" in cols:
+            ordered["ΔF/F"] = cols["ΔF/F"]
+    else:
+        ordered = {**cols, **zscores}
+    available = list(ordered)
+    if p["panels"] is not None:                                       # only these, in this order (a name twice is once)
+        names = list(dict.fromkeys(p["panels"]))
+        if not names:
+            raise ParameterError(f"panels: name at least one panel; the recording has {', '.join(available)}")
+        unknown = [n for n in names if n not in ordered]
+        if unknown:
+            raise ParameterError(f"panels: no panel {unknown[0]!r}; the recording has {', '.join(available)}")
+        ordered = {n: ordered[n] for n in names}
+    x = as_float64(cache["x"])
+    arrays = {k: as_float64(v) for k, v in ordered.items()}
+    keep = _extreme_rows(list(arrays.values()), p["max_points"])
+    table = pd.DataFrame({"time_s": x[keep], **{k: v[keep] for k, v in arrays.items()}})
+    notes = [f"{name}: the trace is flat, so its Z-score is 0" for name, _mu, sd in stats if sd == 0]
+    name0, mu0, sd0 = stats[0]
+    summary = {"n_samples": int(len(x)), "n_rows": int(len(table)), "duration_s": float(x[-1] - x[0]) if len(x) else 0.0,
+               "zscore_mean": mu0, "zscore_sd": sd0, "panels": list(ordered), "available_panels": available}
+    return {"overview": table}, summary, notes
 
 
 def run_group_from_spec(spec, out_dir=None, progress=None):

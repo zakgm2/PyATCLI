@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from .. import _optional
 from ..progress import Plan
 
 
@@ -147,18 +148,9 @@ def embed_text_fields(df, fields, model_name="all-MiniLM-L6-v2", progress=None):
         {field: (n_subjects, dim) ndarray, ...}
     """
     plan = Plan(progress, [("Loading language model", 45), ("Embedding responses", 55)])
-    try:
-        from sentence_transformers import SentenceTransformer
-    except ImportError:
-        # Excluded from packaged/frozen builds of the GUI on purpose —
-        # it pulls in torch/transformers (hundreds of MB-1GB+) for a
-        # feature most installs never touch. Anyone hitting this from a
-        # source/pip install just doesn't have it installed yet.
-        raise ImportError(
-            "Text Field Study's field-similarity comparison needs the "
-            "optional sentence-transformers package, which isn't "
-            "installed. Install it with: pip install sentence-transformers"
-        ) from None
+    # Excluded from packaged/frozen builds of the GUI on purpose — it pulls in torch/transformers (about 2 GB) for a feature most installs never
+    # touch — and an optional extra of the pip install: pip install "PyATCLI[fieldstudy]".
+    SentenceTransformer = _optional.require("fieldstudy").SentenceTransformer
 
     plan.begin("Loading language model")
     model = SentenceTransformer(model_name)

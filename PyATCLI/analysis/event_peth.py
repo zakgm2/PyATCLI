@@ -53,7 +53,7 @@ def compute_group_stats(trial_matrix):
     return mean_trace, sem_trace
 
 
-def compute_event_zscore_peth(time_array, signal, event_times, pre, post, num_bins=300, progress=None):
+def compute_event_zscore_peth(time_array, signal, event_times, pre, post, num_bins=300, progress=None, options=None):
     """
     Z-score and align every occurrence of one event type into a
     trial x time matrix, for a stacked-heatmap + trial-average PETH view
@@ -81,6 +81,9 @@ def compute_event_zscore_peth(time_array, signal, event_times, pre, post, num_bi
         Number of points each trial is resampled to.
     progress : None, True or callable(fraction, message)
         Progress reporting, one tick per event; see PyATCLI.progress.
+    options : PipelineOptions, dict or None
+        The pipeline's options (pipeline.py): the baseline each trial is z-scored
+        against (see get_zscore_slice). None: the defaults.
 
     Returns
     -------
@@ -99,7 +102,7 @@ def compute_event_zscore_peth(time_array, signal, event_times, pre, post, num_bi
     rows = []
     valid_times = []
     for t in Plan(progress, [("Aligning trials", 1)]).track("Aligning trials", event_times):
-        seg_x, seg_z = get_zscore_slice(time_array, signal, t, pre=pre, post=post)
+        seg_x, seg_z = get_zscore_slice(time_array, signal, t, pre=pre, post=post, options=options)
         if seg_x is None or len(seg_x) < 2:
             continue
         rel_x = seg_x - t
@@ -153,6 +156,9 @@ def compute_auc_matrix(time_axis, trial_matrix):
     return {"per_trial": per_trial, "group": group}
 
 
+SLIVER_S = 1e-9                                       # a bin narrower than this is rounding error, not a bin
+
+
 def _mean_time_bins(rel_x, y, post, bin_width):
     """Post-event window [0, post] divided into bin_width-second chunks
     (the last bin is truncated, not dropped, if post isn't evenly
@@ -168,13 +174,31 @@ def _mean_time_bins(rel_x, y, post, bin_width):
         return []
     bins = []
     edge = 0.0
-    while edge < post:
-        bin_end = min(edge + bin_width, post)
+    while edge < post - SLIVER_S:
+        bin_end = edge + bin_width
+        if bin_end > post - SLIVER_S:                 # the last bin ends at `post`; adding up the widths can fall a hair short of it
+            bin_end = post                            # (0.05 s six times over 6 s is 5.999999999999999), which would leave an empty sliver bin
         mask = (rel_x >= edge) & (rel_x < bin_end)
         mean_val = float(np.mean(y[mask])) if mask.any() else float("nan")
         bins.append({"bin_start": edge, "bin_end": bin_end, "mean": mean_val})
         edge = bin_end
     return bins
+
+
+def bin_ranges(edges):
+    """The names of mean-time bins as "start-end" in seconds ("0.0-1.0", "1.0-2.0", ...), for `edges` (the `mean_bins` of
+    compute_peri_event_from_trace: dicts with "bin_start" and "bin_end"). Each edge is written as it is with the fewest decimals
+    (at least one), so bins of a second are "0.0-1.0" as they always were, bins of 0.05 s are "0.00-0.05", "0.05-0.10" (not "0.0-0.1"
+    over and over), and no two bins share a name: a table cannot have two columns of one name, and a result with a column per bin has
+    one per name."""
+    pairs = [(float(b["bin_start"]), float(b["bin_end"])) for b in edges]
+    labels = []
+    for decimals in range(1, 10):
+        labels = [f"{a:.{decimals}f}-{z:.{decimals}f}" for a, z in pairs]
+        exact = decimals >= 6 or all(abs(round(v, decimals) - v) < 1e-9 for pair in pairs for v in pair)
+        if exact and len(set(labels)) == len(labels):
+            break
+    return labels
 
 
 def compute_peri_event_from_trace(rel_x, y, post, bin_width=1.0):

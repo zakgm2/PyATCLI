@@ -11,6 +11,7 @@ where they live and the readers).
       signal_labels.json     the names given to its signals                  {signal key: name}
       highlights.json        shaded stretches                                [{"start", "end", "color"}]
       text_annotations.json  text boxes on the plot                          [{"x", "y", "text", "fontsize"}]
+      pipeline.json          the pipeline options chosen for it              {"schema": 1, "options": {"denoise.cutoff_hz": 8.0, ...}}; not there while every option is its default
 
 Two levels. The writers take what to write — `write_saved_markers(source, markers)` — and check that the app could read it
 back. The edits take a recording's path and do what one action in the app does, to what is already saved:
@@ -29,10 +30,11 @@ import json
 import numbers
 import os
 
+from .pipeline import PipelineOptions
 from .recording import (
-    HIGHLIGHTS_FILE, TEXT_ANNOTATIONS_FILE, annotation_sidecar_path, apply_splice, load_recording, marker_sidecar_path,
-    plan_signal_renames, read_saved_annotations, read_saved_markers, read_saved_signal_labels, read_saved_splices, saved_state_dir,
-    signal_labels_path, splice_sidecar_path,
+    HIGHLIGHTS_FILE, PIPELINE_SCHEMA, TEXT_ANNOTATIONS_FILE, annotation_sidecar_path, apply_splice, load_recording, marker_sidecar_path,
+    pipeline_sidecar_path, plan_signal_renames, read_saved_annotations, read_saved_markers, read_saved_pipeline, read_saved_signal_labels,
+    read_saved_splices, saved_state_dir, signal_labels_path, splice_sidecar_path,
 )
 from .splice import MODE_CUT_OUT, MODE_KEEP_INSIDE
 
@@ -71,6 +73,25 @@ def _remove(path):
     if os.path.exists(path):
         os.remove(path)
     return None
+
+
+def write_saved_pipeline(source_path, options):
+    """Writes the pipeline options (a PipelineOptions, or {name: value} — checked, the rest defaults) as the recording's saved choices: every option's value, so
+    the recording is processed the same way when a default changes later. Options that are all their defaults leave nothing saved (the file is taken away).
+    Returns the file's path, or None if nothing was saved."""
+    options = PipelineOptions.from_dict(options)
+    path = pipeline_sidecar_path(source_path)
+    if options.is_default():
+        return _remove(path)
+    return _dump(path, {"schema": PIPELINE_SCHEMA, "options": options.to_dict()})
+
+
+def set_pipeline(source_path, values):
+    """Pipeline dialog + Save Changes: puts `values` ({option name: value}) on the options saved for the recording and saves them. An unknown name or a value that is
+    not allowed is an error and nothing is written. Returns the options now saved (every one)."""
+    options = PipelineOptions(read_saved_pipeline(source_path)).with_values(values)
+    write_saved_pipeline(source_path, options)
+    return options.to_dict()
 
 
 def write_saved_markers(source_path, markers):
@@ -134,7 +155,7 @@ def clear_saved_state(source_path):
 
 def saved_state_summary(source_path):
     """What is saved for the recording: {"folder", "markers" [..], "splices" [..], "signal_labels" {..}, "highlights" [..],
-    "text_annotations" [..]}, each the list or dict that is saved ([] / {} for nothing). An unreadable file is an error that
+    "text_annotations" [..], "pipeline" {..}}, each the list or dict that is saved ([] / {} for nothing). An unreadable file is an error that
     says which."""
     def read(what, fn, *args):
         try:
@@ -147,7 +168,8 @@ def saved_state_summary(source_path):
             "splices": read("splices", read_saved_splices),
             "signal_labels": read("signal names", read_saved_signal_labels),
             "highlights": read("highlights", read_saved_annotations, HIGHLIGHTS_FILE),
-            "text_annotations": read("text annotations", read_saved_annotations, TEXT_ANNOTATIONS_FILE)}
+            "text_annotations": read("text annotations", read_saved_annotations, TEXT_ANNOTATIONS_FILE),
+            "pipeline": read("pipeline options", read_saved_pipeline)}
 
 
 # ---------------------------------------------------------------------------

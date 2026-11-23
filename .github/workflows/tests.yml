@@ -25,9 +25,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      # Everything the library imports at load time. sentence-transformers (and
-      # so torch, ~2 GB) is only imported lazily by the text-embedding features,
-      # which the tests don't touch, so it is left out to keep this job fast.
+      # What the tests read: the core plus the `tdt` and `excel` extras (pyproject.toml; the install line below names their packages). sentence-transformers (the `fieldstudy` extra, and so torch,
+      # heavy, see pyproject.toml) is only imported lazily by the text-embedding features, which the tests don't touch, so it is left out to keep this job fast.
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -36,6 +35,29 @@ jobs:
       # Run from the repo root so `import PyATCLI` picks up this checkout.
       - name: Run tests
         run: python -m unittest discover -s tests -v
+
+  # The core install (`pip install .`) has none of the optional packages (tdt, scikit-learn, openpyxl, sentence-transformers): the library must import and run without
+  # them, and ask for a missing one by name (PyATCLI/_optional.py). The tests of that are the ones that do not import tdt.
+  core-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install the core only
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .
+
+      - name: Nothing optional came with it, and the library still works
+        run: |
+          python -c "import importlib.util as u; found = [m for m in ('tdt', 'sklearn', 'openpyxl', 'sentence_transformers') if u.find_spec(m)]; assert not found, found"
+          python -c "import sys, PyATCLI; print('PyATCLI', PyATCLI.__version__); assert not {'tdt', 'sklearn', 'openpyxl', 'sentence_transformers', 'torch'} & set(sys.modules)"
+          python -m PyATCLI info
+          python -m unittest tests.test_optional_packages -v
 
   # The library is used by PyAT, which talks to its engine and reads the tables and recordings it returns (ENGINE_CONTRACT.json says what a caller can
   # count on). This runs PyAT's own tests against this checkout of the library, so a change that the app cannot live with is seen here, before release.

@@ -113,7 +113,7 @@ def _best_in_window(seg_z, include_troughs):
 
 
 def find_peak_near_events(time_array, signal, event_times, pre, post,
-                           z_threshold=5.0, include_troughs=False, progress=None):
+                           z_threshold=5.0, include_troughs=False, progress=None, options=None):
     """
     Check whether a statistically significant peak actually shows up near
     each given event time, rather than assuming the event marker itself
@@ -122,7 +122,8 @@ def find_peak_near_events(time_array, signal, event_times, pre, post,
     (checking consistency across all of them).
 
     Each event's window is baselined the same way as get_zscore_slice
-    (pre-event portion), so "significant" means relative to that event's
+    (pre-event portion; `options` are the pipeline's, pipeline.py, and can
+    move that baseline), so "significant" means relative to that event's
     own local baseline, not the whole recording's.
 
     Parameters
@@ -163,7 +164,7 @@ def find_peak_near_events(time_array, signal, event_times, pre, post,
     signal = as_float64(signal)
     results = []
     for t in Plan(progress, [("Searching for peaks", 1)]).track("Searching for peaks", event_times):
-        seg_x, seg_z = get_zscore_slice(time_array, signal, t, pre=pre, post=post)
+        seg_x, seg_z = get_zscore_slice(time_array, signal, t, pre=pre, post=post, options=options)
         if seg_x is None or len(seg_x) == 0:
             results.append({"event_time": t, "found": False, "peak_time": None,
                              "latency": None, "z_score": None, "kind": None})
@@ -182,6 +183,37 @@ def find_peak_near_events(time_array, signal, event_times, pre, post,
     return results
 
 
+def peak_scan_summary(groups, nulls=None):
+    """
+    One row per event type for a scan of several of them (what find_peak_near_events found for each, `groups` = {name: [result dicts]}), the most
+    often-aligned first: how many events there were, how many had a peak aligned with them, the hit rate, and the average z-score of the peaks that were
+    found. With `nulls` ({name: shuffle_null_near_events' answer, as the engine's compute.peaks gives it}) each row also says what chance would do.
+
+        {"event", "occurrences", "found", "hit_rate", "avg_z", "chance_hit_rate", "p_shuffle", "p_holm"}
+
+    `avg_z` is None when no event had a peak; the three chance fields are None where no null was measured for that type (or it could not be), and the
+    keys are always there, so a table made of the rows has the same columns either way. Ties keep the order of `groups`.
+    """
+    rows = []
+    for name, results in groups.items():
+        n_total = len(results)
+        found = [r for r in results if r["found"]]
+        null = (nulls or {}).get(name)
+        measured = bool(null) and bool(null.get("available"))
+        rows.append({
+            "event": name,
+            "occurrences": n_total,
+            "found": len(found),
+            "hit_rate": len(found) / n_total if n_total else 0.0,
+            "avg_z": sum(r["z_score"] for r in found) / len(found) if found else None,
+            "chance_hit_rate": null["chance_hit_rate"] if measured else None,
+            "p_shuffle": null["p_count"] if measured else None,
+            "p_holm": null.get("p_count_holm") if measured else None,
+        })
+    rows.sort(key=lambda row: row["hit_rate"], reverse=True)
+    return rows
+
+
 def holm_adjust(p_values):
     """Holm's step-down adjustment of a list of p-values for the number of them looked at together (the event types a scan
     tests). `None` entries stay `None` and are not counted. Gives the same numbers as statsmodels' multipletests(method="holm")."""
@@ -194,17 +226,17 @@ def holm_adjust(p_values):
     return adjusted
 
 
-def _window_stat(time_array, signal, t, pre, post, include_troughs):
+def _window_stat(time_array, signal, t, pre, post, include_troughs, options=None):
     """|z| of the sample find_peak_near_events takes in the window around t (what it compares with z_threshold), or NaN
     when the window holds no samples."""
-    seg_x, seg_z = get_zscore_slice(time_array, signal, t, pre=pre, post=post)
+    seg_x, seg_z = get_zscore_slice(time_array, signal, t, pre=pre, post=post, options=options)
     if seg_x is None or len(seg_x) == 0:
         return np.nan
     return abs(_best_in_window(seg_z, include_troughs)[1])
 
 
 def shuffle_null_near_events(time_array, signal, event_times, pre, post, z_threshold=5.0, include_troughs=False,
-                              n_shuffles=DEFAULT_SHUFFLES, seed=0, progress=None):
+                              n_shuffles=DEFAULT_SHUFFLES, seed=0, progress=None, options=None):
     """
     How often find_peak_near_events turns up a "response" by chance on this recording, and whether these events do
     better than that.
@@ -267,14 +299,14 @@ def shuffle_null_near_events(time_array, signal, event_times, pre, post, z_thres
         out["reason"] = "no event has a complete window inside the recording"
         return out
 
-    observed = np.array([_window_stat(time_array, signal, t, pre, post, include_troughs) for t in times])
+    observed = np.array([_window_stat(time_array, signal, t, pre, post, include_troughs, options) for t in times])
     base = times[movable]
     rng = np.random.default_rng(seed)
     offsets = rng.uniform(0.0, span, n_shuffles)
     shifted_stats = np.empty((n_shuffles, base.size))
     for k in Plan(progress, [("Shuffling event times", 1)]).track("Shuffling event times", range(n_shuffles)):
         shifted = lo + np.mod(base - lo + offsets[k], span)
-        shifted_stats[k] = [_window_stat(time_array, signal, t, pre, post, include_troughs) for t in shifted]
+        shifted_stats[k] = [_window_stat(time_array, signal, t, pre, post, include_troughs, options) for t in shifted]
 
     hits = shifted_stats >= z_threshold                     # NaN (a window in a gap) compares False
     null_counts = hits.sum(axis=1)

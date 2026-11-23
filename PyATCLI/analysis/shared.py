@@ -10,10 +10,16 @@ FFT-specific code that happens to need the same helper.
 
 import numpy as np
 
+from .. import pipeline
 from ..numeric import as_float64
 
 # Moving-average window every event-locked analysis smooths the dF/F with first; named so provenance can report it.
 SMOOTH_WINDOW_SEC = 0.5
+
+pipeline.register_step("smoothing", "Smoothing", 40, [
+    pipeline.Option("smoothing", "window_s", "float", SMOOTH_WINDOW_SEC, "Smoothing window", "The width of the moving average every event-locked analysis "
+                    "smooths the dF/F with before it z-scores it (0: none).", minimum=0.0, maximum=60.0, unit="s"),
+])
 
 
 def estimate_sample_rate(time_array):
@@ -74,6 +80,19 @@ def mean_channels(arr):
     """
     arr = as_float64(arr)
     return arr.mean(axis=0) if arr.ndim > 1 else arr
+
+
+@pipeline.sentence("smoothing")
+def _smoothing_sentence(options, state):
+    window = options["smoothing.window_s"]
+    if window <= 0:
+        return "The dF/F was not smoothed before event-locked analyses"
+    return f"For event-locked analyses the dF/F was smoothed with a {window:g} s moving average"
+
+
+def smooth_for(cache, data):
+    """`data` (a trace of the recording `cache`) smoothed by the window its pipeline options say (smoothing.window_s; 0.5 s unless it was changed)."""
+    return smooth_signal(data, cache["fs"], window_sec=pipeline.options_of(cache)["smoothing.window_s"])
 
 
 def smooth_signal(data, fs, window_sec=SMOOTH_WINDOW_SEC):

@@ -316,6 +316,21 @@ class TestBuildingBlocksForAWindow(SessionCase):
                                               "events": {"A": [4.0, 9.0], "B": [14.0]}})
         self.assertEqual({k: len(v) for k, v in answer["groups"].items()}, {"A": 2, "B": 1})
 
+    def test_a_scan_comes_with_its_summary_table(self):
+        answer = self.call("compute.peaks", {"recording": self.ref, "scope": "events", "z_threshold": 1.0, "pre": 2.0, "post": 3.0,
+                                              "events": {"A": [4.0, 9.0], "B": [14.0]}})
+        self.assertEqual(answer["summary"], pl.peak_scan_summary(answer["groups"]))
+        self.assertEqual({row["event"] for row in answer["summary"]}, {"A", "B"})
+        self.assertTrue(all(row["chance_hit_rate"] is None for row in answer["summary"]))         # (no shuffles asked for: no chance level)
+
+    def test_the_summary_has_the_chance_level_when_shuffles_were_asked_for(self):
+        answer = self.call("compute.peaks", {"recording": self.ref, "scope": "events", "z_threshold": 1.0, "pre": 2.0, "post": 3.0,
+                                              "events": {"A": [4.0, 9.0, 14.0], "B": [6.0, 11.0, 16.0]}, "n_shuffles": 5, "seed": 0})
+        self.assertEqual(answer["summary"], pl.peak_scan_summary(answer["groups"], answer["null"]))
+        measured = [row for row in answer["summary"] if answer["null"][row["event"]]["available"]]
+        for row in measured:
+            self.assertEqual(row["p_holm"], answer["null"][row["event"]]["p_count_holm"])
+
     def test_the_start_buffer_applies_to_the_whole_recording_search(self):
         cache, key, label, clean = self.reference()
         for buffer_s in (0.0, 5.0, 10.0):

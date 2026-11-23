@@ -118,12 +118,34 @@ class GroupSpec:
     alpha: float = 0.05
     # The dF/F is recomputed for every recording with this motion-correction method.
     regression_method: str = "ols"
+    # The pipeline options (pipeline.py) every recording is processed with — {option name: value}, only the ones that are not their default — on top of what each
+    # recording has saved for itself (saved_state.set_pipeline); the zscore.statistic one also decides how a trial's baseline is taken. {}: each recording's own
+    # saved choices, else the defaults. The smoothing and the baseline window above are the group's own; GroupSpec.from_pipeline starts them from the options.
+    pipeline: dict = field(default_factory=dict)
 
     def to_dict(self):
         d = {f.name: getattr(self, f.name) for f in fields(self)}
         d["baseline"] = list(self.baseline)
         d["response"] = list(self.response)
         return d
+
+    @classmethod
+    def from_pipeline(cls, options, **fields):
+        """A spec that processes every recording with the pipeline options `options` ({option name: value}; a ValueError says what is wrong with one), with the
+        group's own smoothing window and baseline window starting from them where the options say something: smoothing.window_s is `smooth_seconds`, and
+        zscore.baseline_start_s / baseline_end_s (seconds from the event) are the ends of `baseline`. What `fields` gives is used as it is."""
+        from ...pipeline import PipelineOptions
+        changed = PipelineOptions.from_dict(options).changed()
+        fields = dict(fields)
+        fields.setdefault("pipeline", dict(changed))
+        if "smoothing.window_s" in changed:
+            fields.setdefault("smooth_seconds", changed["smoothing.window_s"])
+        first, last = DEFAULT_BASELINE
+        first = changed.get("zscore.baseline_start_s", first)
+        last = changed.get("zscore.baseline_end_s", last)
+        if (first, last) != DEFAULT_BASELINE:
+            fields.setdefault("baseline", (first, last))
+        return cls(**fields)
 
     @classmethod
     def from_dict(cls, d):
@@ -191,6 +213,14 @@ class GroupSpec:
             out.append("The significance level must be between 0 and 1.")
         if self.regression_method not in REGRESSION_METHODS:
             out.append(f"Regression method must be one of {', '.join(REGRESSION_METHODS)}.")
+        if not isinstance(self.pipeline, dict):
+            out.append("The pipeline options must be {option name: value}.")
+        else:
+            from ...pipeline import PipelineOptions
+            try:
+                PipelineOptions(self.pipeline)
+            except ValueError as e:
+                out.append(f"Pipeline options: {e}.")
         return out
 
 

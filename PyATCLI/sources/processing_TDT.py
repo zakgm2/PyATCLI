@@ -3,22 +3,36 @@ sources/processing_TDT.py
 -------------------------
 Signal processing pipeline for TDT (Tucker-Davis Technologies) fibre photometry data.
 
-Handles loading, bleaching correction, denoising, and event marker extraction.
-Depends on the `tdt` Python SDK for reading tank files.
+Handles loading, bleaching correction, denoising, and event marker extraction. The choices in it — the window the motion-correction regression is fitted over,
+what the dF/F is divided by, the low-pass filter — are options of the pipeline (pipeline.py), declared below next to the code that obeys them; their defaults are what
+this module did before they were options, bit for bit.
+Depends on the `tdt` Python SDK for reading tank files: an optional extra (`pip install "PyATCLI[tdt]"`), imported when a recording is first read.
 """
 
 import os
 
-import numpy as np
-from sklearn.linear_model import HuberRegressor, RANSACRegressor
-from scipy.optimize import curve_fit
-from scipy.signal import butter, filtfilt
-import tdt
+import warnings
 
+import numpy as np
+from scipy.optimize import curve_fit
+from scipy.signal import butter, filtfilt, sosfiltfilt
+
+from .. import _optional, pipeline
 from ..models import double_exponential_model as double_exponential
+from ..models import single_exponential_model as single_exponential
 from ..numeric import as_float64
 from ..progress import Plan
 from ..splice import replay_splices
+
+
+def _tdt():
+    """The `tdt` package, imported the first time a recording is read (an optional extra: pip install "PyATCLI[tdt]")."""
+    return _optional.require("tdt")
+
+
+def _linear_model():
+    """sklearn.linear_model, imported the first time a Huber or RANSAC fit is asked for (it belongs to the same extra: pip install "PyATCLI[tdt]")."""
+    return _optional.require("tdt", "sklearn.linear_model")
 
 REGRESSION_METHODS = ("ransac", "huber", "ols")
 
@@ -26,6 +40,105 @@ REGRESSION_METHODS = ("ransac", "huber", "ols")
 # provenance record (provenance.pipeline_parameters) reports what ran rather than a copy of it.
 DENOISE_CUTOFF_HZ = 5
 DENOISE_ORDER = 2
+
+F0_METHODS = ("double_exponential", "single_exponential", "linear", "fitted_isosbestic", "running_median", "running_percentile")
+MIN_FIT_SAMPLES = 100                    # a baseline or a regression is not fitted to fewer samples than this
+
+
+def _check_fit_window(values):
+    start, end = values["motion.fit_start_s"], values["motion.fit_end_s"]
+    if start is not None and end is not None and not start < end:
+        raise ValueError(f"motion.fit_start_s ({start:g}) must be before motion.fit_end_s ({end:g})")
+    first, last = values["motion.exclude_start_s"], values["motion.exclude_end_s"]
+    if (first is None) != (last is None):
+        raise ValueError("motion.exclude_start_s and motion.exclude_end_s are given together, or not at all")
+    if first is not None and not first < last:
+        raise ValueError(f"motion.exclude_start_s ({first:g}) must be before motion.exclude_end_s ({last:g})")
+
+
+pipeline.register_step("motion", "Motion correction", 10, [
+    pipeline.Option("motion", "fit_start_s", "seconds_or_none", None, "Fit from", "Fit the regression of the 415 stream onto the 465 stream only on the samples "
+                    "from this time (seconds on the recording's time axis); the fitted line is still applied to every sample. None: from the start.", minimum=0.0, unit="s"),
+    pipeline.Option("motion", "fit_end_s", "seconds_or_none", None, "Fit until", "Fit the regression only on the samples up to this time. None: to the end.",
+                    minimum=0.0, unit="s"),
+    pipeline.Option("motion", "exclude_start_s", "seconds_or_none", None, "Leave out from", "Leave the samples from this time to 'Leave out until' out of the "
+                    "regression (an artifact, a stretch of movement); the fitted line is still applied to them.", minimum=0.0, unit="s"),
+    pipeline.Option("motion", "exclude_end_s", "seconds_or_none", None, "Leave out until", "The end of the stretch left out of the regression.", minimum=0.0, unit="s"),
+], check=_check_fit_window, sources=("TDT",))
+
+pipeline.register_step("dff", "dF/F baseline (F0)", 20, [
+    pipeline.Option("dff", "f0_method", "choice", "double_exponential", "Baseline F0", "What the motion-corrected signal is divided by to make dF/F: a double or a "
+                    "single exponential or a straight line fitted to the 465 stream (photobleaching), the 415 stream as fitted to the 465 (dF/F = (465 - fitted 415) / "
+                    "fitted 415, as GuPPy does), or a running median or percentile of the 465 stream.", choices=F0_METHODS),
+    pipeline.Option("dff", "f0_window_s", "float", 60.0, "Running window", "The width of the window a running median or percentile is taken over.", minimum=1.0, unit="s"),
+    pipeline.Option("dff", "f0_percentile", "float", 10.0, "Running percentile", "Which percentile of the window a running percentile baseline takes (the median is 50).",
+                    minimum=0.0, maximum=100.0, unit="%"),
+], sources=("TDT",))
+
+pipeline.register_step("denoise", "Low-pass filter", 30, [
+    pipeline.Option("denoise", "enabled", "bool", True, "Low-pass filter the dF/F", "Filter the dF/F with a zero-phase Butterworth low-pass filter."),
+    pipeline.Option("denoise", "cutoff_hz", "float", float(DENOISE_CUTOFF_HZ), "Cutoff", "The filter's cutoff frequency (below half the sampling rate).",
+                    minimum=0.001, unit="Hz"),
+    pipeline.Option("denoise", "order", "int", DENOISE_ORDER, "Order", "The filter's order.", minimum=1, maximum=8),
+], sources=("TDT",))
+
+
+_REGRESSION_NAMES = {"ols": "OLS regression", "huber": "Huber (robust) regression", "ransac": "RANSAC (robust) regression"}
+_F0_NAMES = {"double_exponential": "a double-exponential photobleaching baseline", "single_exponential": "a single-exponential photobleaching baseline",
+             "linear": "a linear baseline"}
+
+
+def _has_reference(state):
+    """Whether the recording has a 415 nm reference stream, as far as `state` knows (it does unless its signals are known and have none)."""
+    labels = state.get("signal_labels")
+    return "isosbestic" in labels if labels else state.get("has_reference", True)
+
+
+@pipeline.sentence("motion", clause=True)
+def _motion_sentence(options, state):
+    if state.get("source_type") not in (None, "TDT"):
+        return None
+    if not _has_reference(state):
+        return "dF/F was computed from the 465 nm channel alone (the recording has no 415 nm reference stream)"
+    start, end, first, last = (options[f"motion.{k}"] for k in ("fit_start_s", "fit_end_s", "exclude_start_s", "exclude_end_s"))
+    window = ""
+    if start is not None or end is not None or first is not None:
+        parts = []
+        if start is not None or end is not None:
+            parts.append(f"fitted on the samples from {'the start' if start is None else f'{start:g} s'} to {'the end' if end is None else f'{end:g} s'}")
+        if first is not None:
+            parts.append(f"leaving out {first:g}-{last:g} s")
+        window = " (" + ", ".join(parts) + "; the fitted line was applied to every sample)"
+    method = _REGRESSION_NAMES.get(state.get("regression_method") or "ols", "regression")
+    return f"dF/F was computed by {method} of the 415 nm channel onto the 465 nm channel{window}, with the fitted 415 subtracted"
+
+
+@pipeline.sentence("dff", clause=True)
+def _dff_sentence(options, state):
+    if state.get("source_type") not in (None, "TDT"):
+        return None
+    method, reference = options["dff.f0_method"], _has_reference(state)
+    window = f"{options['dff.f0_window_s']:g} s"
+    if method == "fitted_isosbestic" and reference:
+        return "then divided by the fitted 415 nm channel (dF/F = (465 - fitted 415) / fitted 415)"
+    if method == "fitted_isosbestic":
+        method = "double_exponential"                       # (what the pipeline does when there is no 415 nm stream to fit)
+    if method == "running_median":
+        baseline = f"a running median of the 465 nm channel ({window} window)"
+    elif method == "running_percentile":
+        baseline = f"a running {pipeline.ordinal(round(options['dff.f0_percentile']))} percentile of the 465 nm channel ({window} window)"
+    else:
+        baseline = _F0_NAMES[method] + " fitted to the 465 nm channel"
+    return f"then divided by {baseline}" if reference else f"as (F - F0) / F0, F0 being {baseline}"
+
+
+@pipeline.sentence("denoise", clause=True)
+def _denoise_sentence(options, state):
+    if state.get("source_type") not in (None, "TDT"):
+        return None
+    if not options["denoise.enabled"]:
+        return "and was not low-pass filtered"
+    return f"then low-pass filtered (Butterworth, {pipeline.ordinal(options['denoise.order'])} order, {options['denoise.cutoff_hz']:g} Hz, zero-phase)"
 
 
 def _robust_linear_fit(x, y, method="ols"):
@@ -130,7 +243,7 @@ def _robust_linear_fit(x, y, method="ols"):
         mx, my = np.median(x), np.median(y)
         sx = 1.4826 * np.median(np.abs(x - mx)) or 1.0
         sy = 1.4826 * np.median(np.abs(y - my)) or 1.0
-        model = HuberRegressor()
+        model = _linear_model().HuberRegressor()
         model.fit(((x - mx) / sx).reshape(-1, 1), (y - my) / sy)
         a = float(model.coef_[0]) * sy / sx
         b = my + sy * float(model.intercept_) - a * mx
@@ -143,7 +256,7 @@ def _robust_linear_fit(x, y, method="ols"):
     noise_est = np.median(np.abs(ols_resid - np.median(ols_resid))) / 0.6745
 
     # Set the threshold to 3x the robust noise estimate (equivalent to a 3-sigma bound)
-    model = RANSACRegressor(residual_threshold=3 * noise_est, random_state=0)
+    model = _linear_model().RANSACRegressor(residual_threshold=3 * noise_est, random_state=0)
     model.fit(x.reshape(-1, 1), y)
 
     # Coerce to float to unpack single-element arrays safely
@@ -181,7 +294,99 @@ def validate_tdt_folder(path):
         return False, "Invalid Folder: No TDT block files (.Tbk) found."
 
 
-def compute_dff(y_465, y_415, fs, regression_method="ols", progress=None):
+def _fit_samples(y, x, fs, options):
+    """The samples the regression is fitted on, as a boolean mask, or None for all of them (the default: nothing about the window is set).
+    ValueError if the window leaves fewer than MIN_FIT_SAMPLES."""
+    start, end = options["motion.fit_start_s"], options["motion.fit_end_s"]
+    first, last = options["motion.exclude_start_s"], options["motion.exclude_end_s"]
+    if start is None and end is None and first is None:
+        return None
+    t = as_float64(x) if x is not None else np.arange(len(y)) / fs
+    keep = np.ones(len(y), dtype=bool)
+    if start is not None:
+        keep &= t >= start
+    if end is not None:
+        keep &= t <= end
+    if first is not None:
+        keep &= ~((t >= first) & (t <= last))
+    if int(keep.sum()) < MIN_FIT_SAMPLES:
+        raise ValueError(f"the regression's fit window leaves {int(keep.sum())} samples; it needs at least {MIN_FIT_SAMPLES}")
+    return keep
+
+
+def _masked_samples(y, fs):
+    """(time, signal) of the samples above the stream's median — what the bleaching baselines are fitted to, so a dip is not fitted — or None if there are
+    fewer than MIN_FIT_SAMPLES of them."""
+    y = as_float64(y)
+    x = np.arange(len(y)) / fs
+    mask = y > np.median(y)
+    return (x, x[mask], y[mask]) if int(mask.sum()) >= MIN_FIT_SAMPLES else None
+
+
+def single_exponential_baseline(y, fs):
+    """The photobleaching trend of `y` as a single exponential, a * exp(-b t) + c, fitted as correct_bleaching fits the double: on the samples above the median, in
+    units of the signal's own size, with the log-linear trend as the fallback if the fit fails. All zeros if there are too few samples to fit."""
+    found = _masked_samples(y, fs)
+    if found is None:
+        return np.zeros(len(y))
+    x, x_fit, y_fit = found
+    scale = np.max(np.abs(y_fit))
+    if not np.isfinite(scale) or scale <= 0:
+        scale = 1.0
+    y_fit = y_fit / scale
+    k_guess = np.percentile(y_fit, 10)
+    p0 = [np.max(y_fit) - k_guess, 0.05, k_guess]
+    try:
+        popt, _ = curve_fit(single_exponential, x_fit, y_fit, p0=p0, bounds=([0, 0, k_guess * 0.8], [np.inf, 1, np.max(y_fit)]), maxfev=10000)
+        return scale * single_exponential(x, *popt)
+    except Exception:
+        warnings.warn("single_exponential_baseline: the fit failed; falling back to a log-linear trend.", RuntimeWarning, stacklevel=2)
+        coeffs = np.polyfit(x_fit, np.log(np.maximum(y_fit, 1e-6)), 1)
+        return scale * np.exp(np.polyval(coeffs, x))
+
+
+def linear_baseline(y, fs):
+    """The trend of `y` as a straight line fitted to the samples above its median. All zeros if there are too few samples to fit."""
+    found = _masked_samples(y, fs)
+    if found is None:
+        return np.zeros(len(y))
+    x, x_fit, y_fit = found
+    return np.polyval(np.polyfit(x_fit, y_fit, 1), x)
+
+
+def running_percentile_baseline(y, fs, window_s, percentile):
+    """A running percentile of `y` (the median at 50) over a window of `window_s` seconds centred on each sample — a window cut short at the ends of the
+    recording. It is worked out every window/10 seconds and joined by straight lines, so a long recording costs about ten windows' worth of samples per window of
+    time instead of one for every sample."""
+    y = as_float64(y)
+    n = len(y)
+    if n == 0:
+        return y.copy()
+    half = max(1, int(round(window_s * fs / 2)))
+    centres = np.unique(np.append(np.arange(0, n, max(1, half // 5)), n - 1))
+    values = np.array([np.percentile(y[max(0, c - half):min(n, c + half + 1)], percentile) for c in centres])
+    return np.interp(np.arange(n), centres, values)
+
+
+def f0_trend(y, fs, options):
+    """The baseline fluorescence F0 of `y` (the 465 stream) by the options' method: the double exponential the pipeline has always used by default, a single
+    exponential, a line, or a running median or percentile. ('fitted_isosbestic' is the 415 stream as fitted to the 465, not a trend of the 465: compute_dff takes
+    that one itself; asked of a recording with no 415 stream it falls back to the double exponential, with a warning.)"""
+    method = options["dff.f0_method"]
+    if method == "fitted_isosbestic":
+        warnings.warn("dff.f0_method fitted_isosbestic needs a 415 reference stream, which this recording has not; the double exponential baseline was used.",
+                      RuntimeWarning, stacklevel=2)
+    if method in ("double_exponential", "fitted_isosbestic"):
+        return correct_bleaching(y, fs)[1]
+    if method == "single_exponential":
+        return single_exponential_baseline(y, fs)
+    if method == "linear":
+        return linear_baseline(y, fs)
+    percentile = 50.0 if method == "running_median" else options["dff.f0_percentile"]
+    return running_percentile_baseline(y, fs, options["dff.f0_window_s"], percentile)
+
+
+def compute_dff(y_465, y_415, fs, regression_method="ols", progress=None, options=None, x=None):
     """
     The actual motion-correction + bleaching-correction + ΔF/F + denoise
     pipeline (steps 3-6 of process_tdt_folder's docstring), factored out
@@ -207,6 +412,13 @@ def compute_dff(y_465, y_415, fs, regression_method="ols", progress=None):
         Progress reporting; see PyATCLI.progress. The photobleaching
         fit dominates the run time (a single scipy call with no steps to
         tick), so it shows as one long stage.
+    options : PipelineOptions, dict or None
+        The pipeline's options (pipeline.py): the window the regression is fitted
+        over, what the dF/F is divided by, the low-pass filter. None: the defaults,
+        which are what this function did before they were options.
+    x : array or None
+        The time axis of the samples, for the regression's fit window (seconds);
+        None counts from the first sample at `fs`.
 
     Returns
     -------
@@ -231,6 +443,7 @@ def compute_dff(y_465, y_415, fs, regression_method="ols", progress=None):
     # Everything is done in float64: TDT hands over float32, and the fit (see
     # _robust_linear_fit) is not safe in single precision.
     y_465 = as_float64(y_465)
+    options = pipeline.PipelineOptions.from_dict(options)
     # Weights are roughly the measured share of the run time: on a 17-minute
     # 1 kHz recording the bleaching fit is ~70-90% of it, the regression 2-20%
     # depending on the method, the filtering almost nothing.
@@ -240,24 +453,34 @@ def compute_dff(y_465, y_415, fs, regression_method="ols", progress=None):
     if y_415 is not None:
         y_415 = as_float64(y_415)
         plan.begin("Fitting motion correction")
-        a, b, inlier_fraction = _robust_linear_fit(y_415, y_465, method=regression_method)
+        fit_on = _fit_samples(y_465, x, fs, options)
+        if fit_on is None:
+            a, b, inlier_fraction = _robust_linear_fit(y_415, y_465, method=regression_method)
+        else:
+            a, b, inlier_fraction = _robust_linear_fit(y_415[fit_on], y_465[fit_on], method=regression_method)
         y_fit = a * y_415 + b
         y_final = y_465 - y_fit
         plan.begin("Fitting photobleaching baseline")
-        _, trend = correct_bleaching(y_465, fs)
-        f0  = np.maximum(trend, 1e-6)
+        if options["dff.f0_method"] == "fitted_isosbestic":
+            f0  = np.maximum(y_fit, 1e-6)                    # GuPPy's: (465 - fitted 415) / fitted 415
+        elif options["dff.f0_method"] == "double_exponential":
+            _, trend = correct_bleaching(y_465, fs)
+            f0  = np.maximum(trend, 1e-6)
+        else:
+            f0  = np.maximum(f0_trend(y_465, fs, options), 1e-6)
         plan.begin("Normalising and filtering")
         dff = y_final / f0
     else:
         y_final = y_465
         inlier_fraction = None
         plan.begin("Fitting photobleaching baseline")
-        _, trend = correct_bleaching(y_final, fs)
+        trend = correct_bleaching(y_final, fs)[1] if options["dff.f0_method"] == "double_exponential" else f0_trend(y_final, fs, options)
         f0  = np.maximum(trend, 1e-6)
         plan.begin("Normalising and filtering")
         dff = (y_final - f0) / f0
 
-    dff = denoise_signal(dff, fs, cutoff=DENOISE_CUTOFF_HZ, order=DENOISE_ORDER)
+    if options["denoise.enabled"]:
+        dff = denoise_signal(dff, fs, cutoff=options["denoise.cutoff_hz"], order=options["denoise.order"])
     plan.done()
 
     return {
@@ -269,7 +492,7 @@ def compute_dff(y_465, y_415, fs, regression_method="ols", progress=None):
     }
 
 
-def process_tdt_folder(folder_path, regression_method="ols", progress=None):
+def process_tdt_folder(folder_path, regression_method="ols", progress=None, options=None):
     """
     Full photometry processing pipeline for a TDT recording.
 
@@ -298,6 +521,9 @@ def process_tdt_folder(folder_path, regression_method="ols", progress=None):
         bar on the console; a callable receives (fraction 0-1, message) as
         the recording is read, motion/bleaching-corrected and its markers
         extracted.
+    options : PipelineOptions, dict or None
+        The pipeline's options (pipeline.py); None is the defaults, which is what
+        this function did before the options existed.
 
     Returns
     -------
@@ -342,7 +568,7 @@ def process_tdt_folder(folder_path, regression_method="ols", progress=None):
                      else f"{name_465} (Uncorrected)")
 
     computed = compute_dff(y_465, y_415, fs, regression_method=regression_method,
-                           progress=plan.sub("Computing dF/F"))
+                           progress=plan.sub("Computing dF/F"), options=options, x=x)
     y_final = computed["raw"]
     dff = computed["corr"]
     f0 = computed["f0"]
@@ -431,12 +657,12 @@ def get_tdt_struct(path, progress=None, read_streams=True):
     plan = Plan(progress, [("Reading streams" if read_streams else "Reading block header", 55),
                            ("Reading event stores", 45)])   # ~0.3 s vs ~0.25 s measured
     plan.begin("Reading streams" if read_streams else "Reading block header")
-    heads = tdt.read_block(path, headers=1)
+    heads = _tdt().read_block(path, headers=1)
     if heads is None:
         raise Exception("TDT returned an empty object.")
 
-    data = tdt.read_block(path, headers=heads, evtype=['streams', 'scalars'] if read_streams else ['scalars'],
-                          verbose=0)
+    data = _tdt().read_block(path, headers=heads, evtype=['streams', 'scalars'] if read_streams else ['scalars'],
+                             verbose=0)
     if data is None:
         raise Exception("TDT returned an empty object.")
 
@@ -446,7 +672,7 @@ def get_tdt_struct(path, progress=None, read_streams=True):
     for key, real_name in plan.track("Reading event stores", epoc_stores):
         try:
             # No headers= reuse here — see docstring.
-            ep = tdt.read_block(path, store=real_name, evtype=['epocs'], verbose=0)
+            ep = _tdt().read_block(path, store=real_name, evtype=['epocs'], verbose=0)
         except Exception as e:
             warnings.warn(
                 f"Skipping epoc store '{key}' ({real_name}): {e}",
@@ -794,7 +1020,7 @@ def denoise_signal(signal, fs, cutoff=DENOISE_CUTOFF_HZ, order=DENOISE_ORDER):
     Parameters
     ----------
     cutoff : float
-        Cutoff frequency in Hz
+        Cutoff frequency in Hz (below half the sampling rate)
     order : int
         Filter order
 
@@ -806,5 +1032,12 @@ def denoise_signal(signal, fs, cutoff=DENOISE_CUTOFF_HZ, order=DENOISE_ORDER):
     signal        = as_float64(signal)
     nyquist       = fs / 2
     normal_cutoff = cutoff / nyquist
-    b, a          = butter(order, normal_cutoff, btype='low', analog=False)
-    return filtfilt(b, a, signal)
+    if not 0 < normal_cutoff < 1:
+        raise ValueError(f"the low-pass cutoff ({cutoff:g} Hz) must be above 0 and below half the sampling rate ({nyquist:g} Hz)")
+    if cutoff == DENOISE_CUTOFF_HZ and order == DENOISE_ORDER:
+        # The filter every recording has always been given, computed as it always was, so a recording processed before the filter was an option
+        # replays to the same bits (the transfer-function form and the second-order-sections form differ in the last digits).
+        b, a          = butter(order, normal_cutoff, btype='low', analog=False)
+        return filtfilt(b, a, signal)
+    # Any other cutoff or order: second-order sections, which stay accurate where the transfer-function form does not (a high order, a low cutoff).
+    return sosfiltfilt(butter(order, normal_cutoff, btype='low', analog=False, output='sos'), signal)

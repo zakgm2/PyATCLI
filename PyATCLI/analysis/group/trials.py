@@ -18,7 +18,8 @@ import pandas as pd
 from ...numeric import as_float64
 from ..auc import compute_auc_from_trace
 from ..shared import estimate_sample_rate, smooth_signal
-from ..zscore_peth import _baseline_mean_std
+from ..zscore_peth import baseline_level_and_spread
+from ...pipeline import PipelineOptions
 
 MEASURE_COLUMNS = ("auc", "peak", "mean", "latency", "decay")
 TRIAL_COLUMNS = ["group", "subject", "recording", "marker", "trial", "event_time", "valid", "reason",
@@ -110,7 +111,7 @@ def extract_group_trials(x, y, events, spec, subject, recording="", trace_step=T
         Only the markers in spec.markers are used; one with no events gives no trials.
     spec : GroupSpec
         Uses group_name, markers, pre, post, baseline, response, signal, smooth_seconds,
-        peak_direction and decay_fraction.
+        peak_direction and decay_fraction, and the pipeline option zscore.statistic of spec.pipeline.
     subject, recording : str
         Filled into every row.
     trace_step : float
@@ -130,6 +131,7 @@ def extract_group_trials(x, y, events, spec, subject, recording="", trace_step=T
     y = as_float64(y)
     fs = estimate_sample_rate(x)
     ys = smooth_signal(y, fs, spec.smooth_seconds) if spec.smooth_seconds > 0 else y
+    statistic = PipelineOptions.from_dict(spec.pipeline or None)["zscore.statistic"]      # (mean and SD, unless the pipeline says median and MAD)
     pre, post = spec.pre, spec.post
     b0, b1 = spec.baseline
     grid = np.arange(-pre, post + trace_step / 2, trace_step)
@@ -162,7 +164,7 @@ def extract_group_trials(x, y, events, spec, subject, recording="", trace_step=T
             elif not np.isfinite(seg).all():
                 row["reason"] = "non-finite samples in the window"
             else:
-                mu, sd = _baseline_mean_std(base)
+                mu, sd = baseline_level_and_spread(base, statistic)
                 row["baseline_mean"], row["baseline_sd"] = float(mu), float(sd)
                 corrected = None
                 if spec.signal == "zscore":

@@ -4,7 +4,7 @@ sources/tables.py
 Best-effort parser for arbitrary tabular files.
 
 Supports:
-  .xlsx / .xls  — openpyxl required (pip install openpyxl)
+  .xlsx         — openpyxl required (the `excel` extra: pip install "PyATCLI[excel]"); a legacy .xls is refused by openpyxl with a message to save it as .xlsx
   .csv          — comma-delimited
   .tsv          — tab-delimited
   .txt / .dat / other — delimiter sniffed, then numpy genfromtxt fallback
@@ -24,6 +24,7 @@ from typing import Optional
 
 import numpy as np
 
+from .. import _optional
 from ..numeric import as_float64
 from ..progress import Plan
 
@@ -72,10 +73,7 @@ def load_any_file(path: str, progress=None) -> list[GenericTable]:
 # ---------------------------------------------------------------------------
 
 def _parse_excel(path: str, progress=None) -> list[GenericTable]:
-    try:
-        import openpyxl
-    except ImportError:
-        raise ImportError("Install openpyxl to read .xlsx files:  pip install openpyxl")
+    openpyxl = _optional.require("excel")        # an optional extra: pip install "PyATCLI[excel]"
 
     plan = Plan(progress, [("Opening workbook", 45), ("Reading sheets", 55)])
     plan.begin("Opening workbook")

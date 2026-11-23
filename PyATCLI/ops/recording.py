@@ -26,7 +26,7 @@ def _store(ctx):
     return ctx.store
 
 
-@operation("recording.open", "open a recording and keep it: its id, its structure as JSON and its arrays as .npy files to map (fresh: read the disk again)", result=["id", "path", "cache", "directory", "original_cache", "splices", "signal_labels", "restored", "warnings", "regression_method"])
+@operation("recording.open", "open a recording and keep it: its id, its structure as JSON and its arrays as .npy files to map (fresh: read the disk again)", result=["id", "path", "cache", "directory", "original_cache", "splices", "signal_labels", "restored", "warnings", "regression_method", "pipeline"])
 def open_(ctx, *, path, load=None, fresh=False):
     store = _store(ctx)
     entry = store.open(require_exists(path), load_options(load), ctx.progress(), fresh=bool(fresh))

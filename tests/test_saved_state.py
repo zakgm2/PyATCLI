@@ -105,7 +105,7 @@ class TestWriters(SavedCase):
 
     def test_the_summary_says_what_is_saved(self):
         empty = S.saved_state_summary(self.oxy)
-        self.assertEqual({k: v for k, v in empty.items() if k != "folder"}, {"markers": [], "splices": [], "signal_labels": {}, "highlights": [], "text_annotations": []})
+        self.assertEqual({k: v for k, v in empty.items() if k != "folder"}, {"markers": [], "splices": [], "signal_labels": {}, "highlights": [], "text_annotations": [], "pipeline": {}})
         S.add_marker(self.oxy, 5.0, label="Lever")
         S.add_highlight(self.oxy, 2.0, 1.0, "pink")
         summary = S.saved_state_summary(self.oxy)

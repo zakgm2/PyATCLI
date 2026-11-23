@@ -11,6 +11,7 @@ from numpy.testing import assert_allclose, assert_array_equal
 
 import PyATCLI as pl
 from PyATCLI import analyses as A
+from PyATCLI.analysis.zscore_peth import _baseline_mean_std
 from PyATCLI.analysis import (
     compute_auc_from_trace, compute_auc_matrix, compute_auc_window, compute_event_zscore_peth, compute_fft_slice,
     compute_group_stats, compute_peri_event_from_trace, compute_peri_event_matrix, find_fft_peaks, find_peak_near_events,
@@ -94,8 +95,8 @@ class TestParameters(unittest.TestCase):
         self.assertEqual(A._coerce(A.Param("n", "int"), 2.0), 2)
 
     def test_kinds_and_their_descriptions(self):
-        self.assertEqual(A.kinds(), ("zscore_window", "auc_window", "fft_window", "curve_fit", "event_peth", "peak_finder",
-                                     "event_intervals", "process"))
+        self.assertEqual(A.kinds(), ("zscore_window", "auc_window", "fft_window", "curve_fit", "event_peth", "event_compare", "peak_finder",
+                                     "event_intervals", "process", "recording_overview"))
         info = A.describe_kinds()
         self.assertEqual(set(info), set(A.kinds()))
         for kind, d in info.items():
@@ -104,6 +105,15 @@ class TestParameters(unittest.TestCase):
         names = [p["name"] for p in info["event_peth"]["parameters"]]
         self.assertEqual(names, ["event", "pre_s", "post_s", "bin_s", "selected_trials", "event_times"])
         self.assertTrue(next(p for p in info["event_peth"]["parameters"] if p["name"] == "event")["required"])
+        self.assertEqual([p["name"] for p in info["event_compare"]["parameters"]], ["events", "event_groups", "pre_s", "post_s", "bin_s"])
+        self.assertEqual(list(info["event_compare"]["tables"]), ["traces", "summary"])
+
+    def test_names_are_a_list_or_one_name_and_are_never_split_on_commas(self):
+        names = A.Param("events", "strs")
+        self.assertEqual(A._coerce(names, ["a, b", "c"]), ["a, b", "c"])
+        self.assertEqual(A._coerce(names, "a, b"), ["a, b"])                          # a note's text can hold a comma
+        self.assertEqual(A._coerce(names, ("x", 3)), ["x", "3"])
+        self.assertEqual(A.normalize_parameters("event_compare", {"events": "Lever, left"})["events"], ["Lever, left"])
 
 
 class TestWindowAnalyses(unittest.TestCase):
@@ -279,6 +289,22 @@ class TestEventPeth(unittest.TestCase):
         self.assertEqual(list(r.tables["bins"].columns), ["Trial", "Trial Event Time (s)", "Bin 0.0-2.0s Mean", "Bin 2.0-4.0s Mean",
                                                           "Bin 4.0-6.0s Mean", "Checked"])
 
+    def test_fine_bins_are_named_with_enough_decimals_to_tell_them_apart(self):
+        for bin_s, first, count in ((0.5, "Bin 0.0-0.5s Mean", 12), (0.05, "Bin 0.00-0.05s Mean", 120), (0.01, "Bin 0.00-0.01s Mean", 600)):
+            r = A.run_analysis("event_peth", self.c, {"event": "L1P¹", "post_s": 6, "pre_s": 5, "bin_s": bin_s})
+            cols = list(r.tables["bins"].columns)
+            self.assertEqual(len(cols), 3 + count, bin_s)                                      # Trial, Trial Event Time, Checked
+            self.assertEqual(len(set(cols)), len(cols), bin_s)                                 # no two columns of one name
+            self.assertEqual(cols[2], first)
+
+    def test_a_result_with_fine_bins_travels_the_engine_with_its_tables(self):
+        """A column name that repeats made the engine fail ('DataFrame' has no attribute 'tolist') when the tables were sent."""
+        from PyATCLI.ops.common import tables_wire
+        r = A.run_analysis("event_peth", self.c, {"event": "L1P¹", "post_s": 6, "pre_s": 5, "bin_s": 0.01})
+        wire = tables_wire(None, r.tables, "inline")
+        self.assertEqual(len(wire["bins"]["data"]), len(r.tables["bins"].columns))
+        self.assertEqual(len(wire["bins"]["data"]["Bin 0.00-0.01s Mean"]), len(r.tables["bins"]))
+
     def test_selecting_trials_changes_the_group_and_the_checked_column_but_not_the_per_trial_numbers(self):
         everything = A.run_analysis("event_peth", self.c, {"event": "L1P¹", "pre_s": 10, "post_s": 20})
         some = A.run_analysis("event_peth", self.c, {"event": "L1P¹", "pre_s": 10, "post_s": 20, "selected_trials": [2, 4]})
@@ -344,6 +370,292 @@ class TestEventPeth(unittest.TestCase):
         c = {**self.c, "signals": {"main_driver": self.c["signals"]["main_driver"], "normalized": self.c["signals"]["normalized"]}}
         b = A.run_analysis("event_peth", c, {"event": "L1P¹", "pre_s": 10, "post_s": 20})
         assert_array_equal(a.tables["zscore"]["z_score"].to_numpy(), b.tables["zscore"]["z_score"].to_numpy())
+
+
+def overview_cache(n=20_000, fs=100.0, seed=3, control=True):
+    """A TDT recording with both streams: the 415 control, the 465 signal, what motion correction subtracted (raw = signal - fit) and the dF/F."""
+    rng = np.random.default_rng(seed)
+    x = np.arange(n) / fs
+    iso = 5.0 + 0.1 * rng.standard_normal(n)
+    driver = 10.0 + 0.5 * (iso - 5.0) + 0.3 * rng.standard_normal(n)
+    fit = 0.5 * iso + 7.5
+    raw = driver - fit
+    dff = raw / 10.0
+    cache = {"source": "TDT", "source_path": "C:/x/Rec", "store": "Rec", "x": x, "fs": fs, "raw": raw, "corr": dff,
+             "detected_markers": [], "markers": [],
+             "signals": {"normalized": {"label": "Normalized (dF/F)", "y": dff}, "main_driver": {"label": "Main Driver (x465A)", "y": driver}}}
+    if control:
+        cache["signals"]["isosbestic"] = {"label": "Isosbestic (x415A)", "y": iso}
+    return cache, fit
+
+
+class TestRecordingOverview(unittest.TestCase):
+    """The whole recording's traces stacked, with the Z-score of the dF/F over the whole recording."""
+
+    def setUp(self):
+        self.c, self.fit = overview_cache()
+
+    def run_it(self, **params):
+        return A.run_analysis("recording_overview", self.c, params)
+
+    def test_a_tdt_recording_gives_the_panels_of_an_overview(self):
+        r = self.run_it()
+        t = r.tables["overview"]
+        self.assertEqual(list(t.columns), ["time_s", "Control", "Signal", "Control Fit", "Z-Score", "ΔF/F"])
+        self.assertEqual(len(t), 20_000)
+        assert_array_equal(t["time_s"].to_numpy(), self.c["x"])
+        assert_array_equal(t["Control"].to_numpy(), self.c["signals"]["isosbestic"]["y"])
+        assert_array_equal(t["Signal"].to_numpy(), self.c["signals"]["main_driver"]["y"])
+        assert_array_equal(t["ΔF/F"].to_numpy(), self.c["signals"]["normalized"]["y"])
+        assert_allclose(t["Control Fit"].to_numpy(), self.fit, rtol=0, atol=1e-12)          # the signal minus what was left after motion correction
+
+    def test_the_standard_zscore_is_the_dff_less_its_mean_over_its_sd(self):
+        r = self.run_it()
+        dff = self.c["signals"]["normalized"]["y"]
+        z = r.tables["overview"]["Z-Score"].to_numpy()
+        assert_allclose(z, (dff - dff.mean()) / dff.std(), rtol=0, atol=1e-12)
+        self.assertAlmostEqual(z.mean(), 0.0, places=9)
+        self.assertAlmostEqual(z.std(), 1.0, places=9)
+        self.assertEqual(r.summary["zscore_mean"], float(dff.mean()))
+        self.assertEqual(r.summary["zscore_sd"], float(dff.std()))
+        self.assertEqual(r.parameters, {"signal": "normalized", "method": "standard", "max_points": 0, "panels": None})
+        self.assertEqual(r.summary["panels"], ["Control", "Signal", "Control Fit", "Z-Score", "ΔF/F"])
+        self.assertEqual(r.summary["available_panels"], r.summary["panels"])
+
+    def test_the_robust_zscore_ignores_a_large_transient_when_scaling(self):
+        dff = self.c["signals"]["normalized"]["y"].copy()
+        dff[5000:5010] += 5.0                                                              # a big artefact
+        self.c["signals"]["normalized"]["y"] = dff
+        standard = self.run_it(method="standard").tables["overview"]["Z-Score"].to_numpy()
+        robust = self.run_it(method="robust").tables["overview"]["Z-Score"].to_numpy()
+        mu, sd = _baseline_mean_std(dff)
+        assert_allclose(robust, (dff - mu) / sd, rtol=0, atol=1e-12)
+        self.assertGreater(robust[5005], standard[5005])                                   # the artefact is not allowed to shrink its own z-score
+        self.assertGreater(np.median(np.abs(robust)), np.median(np.abs(standard)))     # (the scale is the typical one, not the artefact's)
+
+    def test_the_signal_to_score_can_be_chosen(self):
+        driver = self.c["signals"]["main_driver"]["y"]
+        z = self.run_it(signal="main_driver").tables["overview"]["Z-Score"].to_numpy()
+        assert_allclose(z, (driver - driver.mean()) / driver.std(), rtol=0, atol=1e-12)
+        with self.assertRaisesRegex(A.ParameterError, "signal: no signal 'nope'.*normalized"):
+            self.run_it(signal="nope")
+        with self.assertRaisesRegex(A.ParameterError, "method"):
+            self.run_it(method="median")
+
+    def test_without_a_control_stream_there_is_no_control_or_fit(self):
+        self.c, _ = overview_cache(control=False)
+        self.assertEqual(list(self.run_it().tables["overview"].columns), ["time_s", "Signal", "Z-Score", "ΔF/F"])
+
+    def test_max_points_keeps_every_peak_and_dip_and_the_rows_stay_aligned(self):
+        full = self.run_it().tables["overview"]
+        small = self.run_it(max_points=1000).tables["overview"]
+        self.assertLessEqual(len(small), 1000 + 10)
+        self.assertGreater(len(small), 100)
+        self.assertTrue(small["time_s"].is_monotonic_increasing)
+        self.assertEqual((small["time_s"].iloc[0], small["time_s"].iloc[-1]), (full["time_s"].iloc[0], full["time_s"].iloc[-1]))
+        for column in full.columns[1:]:
+            self.assertEqual((small[column].min(), small[column].max()), (full[column].min(), full[column].max()), column)    # nothing lost
+        merged = small.merge(full, on="time_s", suffixes=("", "_full"))                     # every kept row is a row of the whole, whole
+        self.assertEqual(len(merged), len(small))
+        for column in full.columns[1:]:
+            assert_array_equal(merged[column].to_numpy(), merged[column + "_full"].to_numpy())
+        self.assertEqual(self.run_it(max_points=1000).summary["n_samples"], 20_000)        # (the z-score is still taken over all of them)
+        zs = small["Z-Score"].to_numpy()
+        dff = self.c["signals"]["normalized"]["y"]
+        self.assertAlmostEqual(zs.max(), (dff.max() - dff.mean()) / dff.std(), places=9)
+        self.assertEqual(len(self.run_it(max_points=100_000).tables["overview"]), 20_000)  # more than there are: all of them
+
+    def test_only_the_panels_asked_for_come_back_in_the_order_asked(self):
+        full = self.run_it().tables["overview"]
+        r = self.run_it(panels=["ΔF/F", "Signal"])
+        t = r.tables["overview"]
+        self.assertEqual(list(t.columns), ["time_s", "ΔF/F", "Signal"])
+        for column in ("time_s", "ΔF/F", "Signal"):
+            assert_array_equal(t[column].to_numpy(), full[column].to_numpy())
+        self.assertEqual(r.parameters["panels"], ["ΔF/F", "Signal"])
+        self.assertEqual(r.summary["panels"], ["ΔF/F", "Signal"])
+        self.assertEqual(r.summary["available_panels"], ["Control", "Signal", "Control Fit", "Z-Score", "ΔF/F"])
+        self.assertEqual(list(self.run_it(panels="Z-Score").tables["overview"].columns), ["time_s", "Z-Score"])        # one name: a list of one
+        self.assertEqual(list(self.run_it(panels=["Signal", "Signal", "Control"]).tables["overview"].columns), ["time_s", "Signal", "Control"])
+
+    def test_the_zscore_is_the_same_whichever_panels_are_kept_and_its_scale_is_still_reported(self):
+        full = self.run_it()
+        without = self.run_it(panels=["Control", "Signal"])
+        self.assertNotIn("Z-Score", without.tables["overview"].columns)
+        self.assertEqual((without.summary["zscore_mean"], without.summary["zscore_sd"]), (full.summary["zscore_mean"], full.summary["zscore_sd"]))
+        only_z = self.run_it(panels=["Z-Score"], method="robust").tables["overview"]["Z-Score"].to_numpy()
+        assert_array_equal(only_z, self.run_it(method="robust").tables["overview"]["Z-Score"].to_numpy())
+
+    def test_a_panel_that_is_not_there_or_none_at_all_is_refused_naming_what_there_is(self):
+        with self.assertRaisesRegex(A.ParameterError, "panels: no panel 'Nope'.*Control, Signal, Control Fit, Z-Score, ΔF/F"):
+            self.run_it(panels=["Signal", "Nope"])
+        with self.assertRaisesRegex(A.ParameterError, "panels: name at least one panel"):
+            self.run_it(panels=[])
+        self.c, _ = overview_cache(control=False)
+        with self.assertRaisesRegex(A.ParameterError, "panels: no panel 'Control'.*Signal, Z-Score, ΔF/F"):
+            self.run_it(panels=["Control"])
+
+    def test_thinning_looks_after_the_panels_that_are_kept(self):
+        full = self.run_it(panels=["Signal", "Z-Score"]).tables["overview"]
+        small = self.run_it(panels=["Signal", "Z-Score"], max_points=400).tables["overview"]
+        self.assertLessEqual(len(small), 400 + 4)
+        for column in ("Signal", "Z-Score"):
+            self.assertEqual((small[column].min(), small[column].max()), (full[column].min(), full[column].max()))
+
+    def test_panels_can_be_chosen_for_any_recording(self):
+        rng = np.random.default_rng(2)
+        cache = {"source": "Generic", "x": np.arange(500) / 5.0, "fs": 5.0, "store": "t", "markers": [],
+                 "y_columns": {"left": rng.standard_normal(500), "right": rng.standard_normal(500) + 3}}
+        t = A.run_analysis("recording_overview", cache, {"panels": ["Z-Score (right)", "left"]}).tables["overview"]
+        self.assertEqual(list(t.columns), ["time_s", "Z-Score (right)", "left"])
+
+    def test_a_flat_trace_has_a_zscore_of_zero_and_says_so(self):
+        self.c["signals"]["normalized"]["y"] = np.full(20_000, 0.25)
+        r = self.run_it()
+        self.assertTrue((r.tables["overview"]["Z-Score"] == 0).all())
+        self.assertIn("flat", r.notes[0])
+
+    def test_an_oxysoft_recording_gives_each_channel_and_its_zscore(self):
+        rng = np.random.default_rng(1)
+        n = 3000
+        cache = {"source": "Oxysoft", "x": np.arange(n) / 10.0, "fs": 10.0, "store": "Ox", "markers": [], "detected_markers": [],
+                 "o2hb": rng.standard_normal((4, n)), "hhb": rng.standard_normal((4, n))}
+        t = A.run_analysis("recording_overview", cache, {}).tables["overview"]
+        self.assertEqual(list(t.columns), ["time_s", "Mean O2Hb", "Mean HHb", "Z-Score (Mean O2Hb)", "Z-Score (Mean HHb)"])
+        y = t["Mean HHb"].to_numpy()
+        assert_allclose(t["Z-Score (Mean HHb)"].to_numpy(), (y - y.mean()) / y.std(), rtol=0, atol=1e-12)
+
+    def test_a_table_file_gives_every_column(self):
+        rng = np.random.default_rng(2)
+        cache = {"source": "Generic", "x": np.arange(500) / 5.0, "fs": 5.0, "store": "t", "markers": [],
+                 "y_columns": {"left": rng.standard_normal(500), "right": rng.standard_normal(500) + 3}}
+        t = A.run_analysis("recording_overview", cache, {}).tables["overview"]
+        self.assertEqual(list(t.columns), ["time_s", "left", "right", "Z-Score (left)", "Z-Score (right)"])
+
+    def test_the_same_answer_every_time(self):
+        a, b = self.run_it(method="robust", max_points=2000), self.run_it(method="robust", max_points=2000)
+        pd.testing.assert_frame_equal(a.tables["overview"], b.tables["overview"])
+
+
+class TestEventCompare(unittest.TestCase):
+    """Several events' average Z-scores side by side: each one is what event_peth gives for it, only put in one table."""
+
+    SECOND = [60.0, 160.0]
+
+    def setUp(self):
+        self.c = make_cache()
+        self.c["detected_markers"] += [phase_marker(t, "high", store="L2P") for t in self.SECOND]
+        self.params = {"events": ["L1P¹", "L2P¹"], "pre_s": 10, "post_s": 20}
+
+    def peth(self, event, **extra):
+        return A.run_analysis("event_peth", self.c, {"event": event, "pre_s": 10, "post_s": 20, **extra})
+
+    def test_each_event_is_what_event_peth_gives_for_it(self):
+        r = A.run_analysis("event_compare", self.c, self.params)
+        traces, summary = r.tables["traces"], r.tables["summary"]
+        self.assertEqual(list(traces.columns), ["Event", "time_from_event_s", "mean", "sem", "n"])
+        for event in ("L1P¹", "L2P¹"):
+            one, rows = self.peth(event), traces[traces["Event"] == event]
+            assert_array_equal(rows["time_from_event_s"].to_numpy(), one.tables["mean_sem"]["time_from_event_s"].to_numpy())
+            assert_array_equal(rows["mean"].to_numpy(), one.tables["mean_sem"]["mean"].to_numpy())
+            assert_array_equal(rows["sem"].to_numpy(), one.tables["mean_sem"]["sem"].to_numpy())
+            self.assertEqual(set(rows["n"]), {one.summary["n_trials"]})
+            row = summary[summary["Event"] == event].iloc[0]
+            group_peak, group_auc, group_bins = (one.tables[t].iloc[-1] for t in ("peak", "auc", "bins"))
+            self.assertEqual(row["Peak Amplitude"], group_peak["Peak Amplitude"])
+            self.assertEqual(row["Time-to-Peak (s)"], group_peak["Time-to-Peak (s)"])
+            self.assertEqual([row["Total AUC"], row["Positive AUC"], row["Negative AUC"]],
+                             [group_auc["Total AUC"], group_auc["Positive AUC"], group_auc["Negative AUC"]])
+            bin_cols = [c for c in one.tables["bins"].columns if c.startswith("Bin ")]
+            self.assertEqual([row[c] for c in bin_cols], [group_bins[c] for c in bin_cols])
+
+    def test_the_summary_has_a_row_per_event_with_its_counts_and_a_column_per_bin(self):
+        r = A.run_analysis("event_compare", self.c, {**self.params, "bin_s": 5})
+        s = r.tables["summary"]
+        self.assertEqual(list(s.columns), ["Event", "Occurrences", "Trials", "Peak Amplitude", "Time-to-Peak (s)", "Total AUC", "Positive AUC",
+                                           "Negative AUC", "Bin 0.0-5.0s Mean", "Bin 5.0-10.0s Mean", "Bin 10.0-15.0s Mean", "Bin 15.0-20.0s Mean"])
+        self.assertEqual(list(s["Event"]), ["L1P¹", "L2P¹"])
+        self.assertEqual(list(s["Occurrences"]), [5, 2])
+        self.assertEqual(list(s["Trials"]), [5, 2])
+        self.assertEqual(r.summary, {"n_events": 2, "n_trials": 7})
+        self.assertEqual(r.notes, [])
+
+    def test_fine_bins_have_a_column_each_with_a_name_of_its_own(self):
+        from PyATCLI.ops.common import tables_wire
+        for bin_s, first, last, count in ((0.05, "Bin 0.00-0.05s Mean", "Bin 19.95-20.00s Mean", 400), (0.01, "Bin 0.00-0.01s Mean", "Bin 19.99-20.00s Mean", 2000)):
+            r = A.run_analysis("event_compare", self.c, {**self.params, "bin_s": bin_s})
+            cols = [c for c in r.tables["summary"].columns if c.startswith("Bin ")]
+            self.assertEqual((len(cols), cols[0], cols[-1]), (count, first, last), bin_s)
+            self.assertEqual(len(set(r.tables["summary"].columns)), len(r.tables["summary"].columns), bin_s)
+            wire = tables_wire(None, r.tables, "inline")                                       # the engine sends it to the window
+            self.assertEqual(len(wire["summary"]["data"]), len(r.tables["summary"].columns))
+
+    def test_events_are_in_the_order_asked_for_or_by_name_when_all_are_wanted(self):
+        a = A.run_analysis("event_compare", self.c, {**self.params, "events": ["L2P¹", "L1P¹"]})
+        self.assertEqual(list(a.tables["summary"]["Event"]), ["L2P¹", "L1P¹"])
+        everything = A.run_analysis("event_compare", self.c, {"pre_s": 10, "post_s": 20})
+        every_event = sorted(["L1P¹", "L1P⁰", "L2P¹", "MyNote"])                          # the fixture's low-phase markers are events too
+        self.assertEqual(list(everything.tables["summary"]["Event"]), every_event)
+        self.assertEqual(everything.parameters["events"], every_event)                      # what it looked up is recorded
+
+    def test_a_name_listed_twice_is_one_event(self):
+        r = A.run_analysis("event_compare", self.c, {**self.params, "events": ["L1P¹", "L1P¹", "L2P¹"]})
+        self.assertEqual(list(r.tables["summary"]["Event"]), ["L1P¹", "L2P¹"])
+
+    def test_one_event_is_its_own_mean_trace(self):
+        r = A.run_analysis("event_compare", self.c, {**self.params, "events": ["L1P¹"]})
+        assert_array_equal(r.tables["traces"]["mean"].to_numpy(), self.peth("L1P¹").tables["mean_sem"]["mean"].to_numpy())
+
+    def test_events_are_found_by_the_name_the_app_shows_including_renames(self):
+        a = A.run_analysis("event_compare", self.c, {**self.params, "events": ["Lever¹"]}, store_labels={"L1P": "Lever"})
+        b = A.run_analysis("event_compare", self.c, {**self.params, "events": ["L1P¹"]})
+        assert_array_equal(a.tables["traces"]["mean"].to_numpy(), b.tables["traces"]["mean"].to_numpy())
+        self.assertEqual(set(a.tables["traces"]["Event"]), {"Lever¹"})
+
+    def test_an_unknown_event_lists_what_there_is(self):
+        with self.assertRaisesRegex(A.ParameterError, "no event named 'Nope'.*L1P¹"):
+            A.run_analysis("event_compare", self.c, {**self.params, "events": ["L1P¹", "Nope"]})
+        with self.assertRaisesRegex(A.ParameterError, "no events to compare"):
+            A.run_analysis("event_compare", self.c, {**self.params, "events": []})
+
+    def test_the_times_used_are_recorded_and_replay_exactly_without_the_markers(self):
+        r = A.run_analysis("event_compare", self.c, self.params)
+        self.assertEqual(r.parameters["event_groups"], {"L1P¹": EVENTS, "L2P¹": self.SECOND})
+        again = A.run_analysis("event_compare", {**self.c, "markers": [], "detected_markers": []}, r.parameters)
+        for name in r.tables:
+            pd.testing.assert_frame_equal(r.tables[name], again.tables[name])
+
+    def test_an_event_with_no_usable_trial_is_left_out_with_a_note_and_the_rest_are_compared(self):
+        c = make_cache()
+        c["detected_markers"].append(phase_marker(400.0, "high", store="L3P"))          # the recording is 300 s long
+        r = A.run_analysis("event_compare", c, {"events": ["L1P¹", "L3P¹"], "pre_s": 10, "post_s": 20})
+        self.assertEqual(list(r.tables["summary"]["Event"]), ["L1P¹"])
+        self.assertEqual(set(r.tables["traces"]["Event"]), {"L1P¹"})
+        self.assertEqual(len(r.notes), 1)
+        self.assertIn("L3P¹: no usable trial", r.notes[0])
+
+    def test_an_occurrence_too_close_to_the_edge_is_skipped_with_a_note(self):
+        c = make_cache()
+        c["detected_markers"].append(phase_marker(400.0, "high"))
+        r = A.run_analysis("event_compare", c, {"events": ["L1P¹"], "pre_s": 10, "post_s": 20})
+        row = r.tables["summary"].iloc[0]
+        self.assertEqual((row["Occurrences"], row["Trials"]), (6, 5))
+        self.assertTrue(any("1 of 6" in n for n in r.notes))
+
+    def test_no_usable_trial_in_any_event_is_an_error(self):
+        with self.assertRaisesRegex(A.AnalysisError, "No usable trials for any"):
+            A.run_analysis("event_compare", self.c, {"event_groups": {"x": [5000.0], "y": [6000.0]}, "pre_s": 10, "post_s": 20})
+
+    def test_the_window_must_be_positive(self):
+        with self.assertRaisesRegex(A.ParameterError, "must be positive"):
+            A.run_analysis("event_compare", self.c, {**self.params, "post_s": 0})
+
+    def test_progress_follows_the_events(self):
+        seen = []
+        A.run_analysis("event_compare", self.c, self.params, progress=lambda fraction, message: seen.append(fraction))
+        self.assertTrue(seen)
+        self.assertEqual(seen, sorted(seen))
+        self.assertLessEqual(seen[-1], 1.0)
 
 
 class TestPeakFinder(unittest.TestCase):
@@ -549,6 +861,7 @@ class TestDeterminism(unittest.TestCase):
     def test_running_twice_gives_identical_tables(self):
         c = make_cache()
         for kind, params in (("event_peth", {"event": "L1P¹", "pre_s": 10, "post_s": 20}), ("zscore_window", {"center_s": 90.0}),
+                             ("event_compare", {"events": ["L1P¹", "MyNote"], "pre_s": 10, "post_s": 20}),
                              ("fft_window", {"center_s": 100.0}), ("auc_window", {"center_s": 100.0}),
                              ("curve_fit", {"t1_s": 10.0, "t2_s": 20.0})):
             a, b = A.run_analysis(kind, c, params), A.run_analysis(kind, c, params)

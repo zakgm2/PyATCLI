@@ -10,7 +10,7 @@ import os
 from ..analyses import ParameterError
 from . import OpError
 
-LOAD_KEYS = ("regression_method", "use_saved", "table", "x_column", "y_columns")
+LOAD_KEYS = ("regression_method", "use_saved", "table", "x_column", "y_columns", "pipeline")
 
 
 def load_options(load):

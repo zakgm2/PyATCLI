@@ -21,6 +21,7 @@ import pandas as pd
 
 from ... import provenance
 from ...markers import group_markers_by_name
+from ...pipeline import defaults as pipeline_defaults
 from ...progress import Plan
 from ...recording import load_tdt_recording, normalized_signal
 from . import GroupSpec
@@ -31,7 +32,7 @@ from .trials import TRIAL_COLUMNS, extract_group_trials
 GROUP_SETTINGS_FILENAME = "analysis_settings.json"
 
 
-def load_group_recording(folder, regression_method="ols", store_labels=None, progress=None):
+def load_group_recording(folder, regression_method="ols", store_labels=None, progress=None, pipeline=None):
     """
     Loads one recording for group analysis exactly the way the single-recording analyses see it,
     without a window: TDT block processed to dF/F, the recording's saved splices replayed (Cut Out
@@ -44,15 +45,22 @@ def load_group_recording(folder, regression_method="ols", store_labels=None, pro
         fs        sampling rate in Hz
         groups    {marker name: sorted event times}, as Event PETH lists them
         n_splices how many saved splices were applied
-        warnings  saved files that could not be read (the recording is then used without them)
+        warnings  saved files that could not be read (the recording is then used without them), and any pipeline options the recording has saved for itself
+                  that `pipeline` did not choose (they are used: the group is not processed the way it was asked to be)
+    `pipeline` is {option name: value}: pipeline options (pipeline.py) to process the recording with, on top of the ones saved for it.
     Raises ValueError if the folder is not a readable TDT block.
     """
-    loaded = load_tdt_recording(folder, regression_method=regression_method, progress=progress)
+    loaded = load_tdt_recording(folder, regression_method=regression_method, progress=progress, pipeline=pipeline or None)
     cache = loaded["cache"]
     _key, _label, y = normalized_signal(cache)
+    warnings = list(loaded["warnings"])
+    defaults = pipeline_defaults()
+    own = {name: value for name, value in (cache.get("pipeline") or {}).items() if name not in (pipeline or {}) and value != defaults.get(name)}
+    if own:
+        warnings.append("processed with the pipeline options saved for this recording: " + ", ".join(f"{name} = {value}" for name, value in own.items()))
     return {"x": cache["x"], "y": y, "fs": cache["fs"],
             "groups": group_markers_by_name(cache, store_labels),
-            "n_splices": len(loaded["splices"]), "warnings": loaded["warnings"]}
+            "n_splices": len(loaded["splices"]), "warnings": warnings}
 
 
 def run_group_analysis(spec, out_dir=None, progress=None, load=load_group_recording, extra_writers=()):
@@ -61,8 +69,8 @@ def run_group_analysis(spec, out_dir=None, progress=None, load=load_group_record
     written there (write_group_results), then each of `extra_writers` — callables
     f(results, out_dir) -> list of paths written — runs (the app draws and saves its figures this way).
 
-    `load(folder, regression_method, store_labels, progress)` returns what load_group_recording
-    returns; it is a parameter so the analysis can be run on recordings that are not TDT blocks on
+    `load(folder, regression_method, store_labels, progress[, pipeline=spec.pipeline])` returns what load_group_recording
+    returns (it is given `pipeline` only when the spec has some); it is a parameter so the analysis can be run on recordings that are not TDT blocks on
     disk (and so the tests can). Raises RuntimeError naming the subject if a recording cannot be
     loaded: leaving one out silently would change the group, so the person is told and can leave it
     out on purpose instead.
@@ -84,7 +92,8 @@ def run_group_analysis(spec, out_dir=None, progress=None, load=load_group_record
 
         plan.begin(f"rec{i}", f"Loading {name} ({i + 1} of {len(subjects)})")
         try:
-            data = load(folder, spec.regression_method, spec.store_labels, relay if report is not None else None)
+            options = {"pipeline": spec.pipeline} if spec.pipeline else {}
+            data = load(folder, spec.regression_method, spec.store_labels, relay if report is not None else None, **options)
         except Exception as e:
             raise RuntimeError(f"Could not load '{name}' ({folder}): {e}") from e
         out = extract_group_trials(data["x"], data["y"], data["groups"], spec, subject=name, recording=folder)
@@ -144,7 +153,7 @@ def write_group_settings(group_dir, spec, scans, app=None):
         "schema": provenance.SCHEMA_VERSION,
         "kind": "group_analysis",
         "software": provenance.software_versions(app),
-        "pipeline": provenance.pipeline_parameters(spec.regression_method),
+        "pipeline": provenance.pipeline_parameters(spec.regression_method, spec.pipeline or None),
         "analysis": {"type": "group_analysis", "parameters": spec.to_dict()},
     }
     os.makedirs(group_dir, exist_ok=True)

@@ -16,7 +16,7 @@ A record is a plain JSON-able dict:
     software   software_versions(): this library, Python, platform, the numerical packages, the app
     source     file_fingerprint() of the recording's folder / file: names, sizes, hashes
     recording  recording_state(): its type, length, splices, markers, motion-correction method
-    pipeline   pipeline_parameters(): the processing no caller chose, from the constants the code uses
+    pipeline   pipeline_parameters(): the processing, with the pipeline options in force (pipeline.py) and what no option chooses
     analysis   {"type": kind, "parameters": {...}} — what was asked of that analysis
     outputs    the files written, each with its size and hash
     notes      anything worth saying in words
@@ -113,48 +113,94 @@ def check_environment(record, packages=("numpy", "scipy", "pandas", "statsmodels
 # What the pipeline does that no caller chose
 # ---------------------------------------------------------------------------
 
-def pipeline_parameters(regression_method="ols"):
-    """The processing a TDT recording goes through and the analysis conventions, read from the constants
-    the code itself uses (so this cannot drift from what ran)."""
+_F0_MODELS = {                          # dff.f0_method -> (what F0 is, what the dF/F is when the recording has a 415 stream)
+    "double_exponential": ("double exponential fitted to the 465 stream", "motion-corrected residual / bleaching baseline"),
+    "single_exponential": ("single exponential fitted to the 465 stream", "motion-corrected residual / bleaching baseline"),
+    "linear": ("straight line fitted to the 465 stream", "motion-corrected residual / baseline line"),
+    "fitted_isosbestic": ("the 415 stream as fitted to the 465 stream", "(465 - fitted 415) / fitted 415"),
+    "running_median": ("running median of the 465 stream", "motion-corrected residual / running median"),
+    "running_percentile": ("running percentile of the 465 stream", "motion-corrected residual / running percentile"),
+}
+
+
+def _fit_window_text(o):
+    start, end, first, last = o["motion.fit_start_s"], o["motion.fit_end_s"], o["motion.exclude_start_s"], o["motion.exclude_end_s"]
+    parts = []
+    if start is not None or end is not None:
+        parts.append(f"from {'the start' if start is None else f'{start:g} s'} to {'the end' if end is None else f'{end:g} s'}")
+    if first is not None:
+        parts.append(f"leaving out {first:g}-{last:g} s")
+    return "; ".join(parts) or "all samples"
+
+
+def _baseline_fit_text(o):
+    method = o["dff.f0_method"]
+    if method in ("double_exponential", "single_exponential"):
+        return "scipy.optimize.curve_fit on the samples above the stream's median, in units of its own maximum"
+    if method == "linear":
+        return "numpy.polyfit on the samples above the stream's median"
+    if method == "fitted_isosbestic":
+        return "the regression of the 415 stream onto the 465 stream (motion correction)"
+    window = o["dff.f0_window_s"]
+    return f"every {window / 10:g} s over a window of {window:g} s centred there, joined by straight lines"
+
+
+def _zscore_baseline_text(o):
+    start, end = o["zscore.baseline_start_s"], o["zscore.baseline_end_s"]
+    if start is None and end == 0:
+        return "the samples before the event (t < event time)"
+    first = "the start of the window" if start is None else f"{start:g} s from the event"
+    return f"the samples from {first} until {end:g} s from the event"
+
+
+def pipeline_parameters(regression_method="ols", options=None):
+    """The processing a TDT recording goes through and the analysis conventions: the pipeline options in force (`options`: a PipelineOptions, a dict of option
+    names and values, or None for the defaults — pipeline.py) and what each means, and what no option chooses. Read from the registry and from the constants
+    the code itself uses, so this cannot drift from what ran."""
+    from .pipeline import PipelineOptions
     from .sources import processing_TDT as P
-    from .analysis import shared, zscore_peth
+    from .analysis import zscore_peth
 
     if regression_method not in P.REGRESSION_METHODS:
         raise ValueError(f"Unknown regression method {regression_method!r}; expected one of {P.REGRESSION_METHODS}")
+    o = PipelineOptions.from_dict(options)
+    method = o["dff.f0_method"]
+    model, with_reference = _F0_MODELS[method]
+    legacy_filter = o["denoise.cutoff_hz"] == P.DENOISE_CUTOFF_HZ and o["denoise.order"] == P.DENOISE_ORDER
+    zscore = {"baseline": _zscore_baseline_text(o), "statistic": "mean and SD" if o["zscore.statistic"] == "mean_sd" else "median and MAD (1.4826 x MAD for the SD)"}
+    if o["zscore.statistic"] == "mean_sd":
+        zscore.update({"baseline_artifact_guard": f"samples beyond {zscore_peth.BASELINE_ROBUST_SD:g} robust SDs (1.4826 x MAD) "
+                                                  "of the baseline median are pulled in before its mean and SD are taken",
+                       "robust_sd_limit": zscore_peth.BASELINE_ROBUST_SD})
     return {
         "dtype": "float64",
+        "options": o.to_dict(),
         "motion_correction": {
             "method": regression_method,
             "signal_stream": "the stream whose name contains '465'",
             "reference_stream": "the stream whose name contains '415' (none: no motion correction)",
             "fit": "linear regression of the 415 reference onto the 465 signal; the fitted 415 is subtracted",
+            "fit_window": _fit_window_text(o),
             "ransac": {"residual_threshold": "3 x robust noise (MAD of an OLS fit's residuals / 0.6745)", "random_state": 0},
             "huber": {"epsilon": 1.35, "fitted on median/MAD-standardised data": True},
         },
         "photobleaching": {
-            "model": "double exponential fitted to the 465 stream",
-            "fit": "scipy.optimize.curve_fit on the samples above the stream's median, in units of its own maximum",
-            "fallback": "log-linear trend if the fit fails",
+            "model": model,
+            "fit": _baseline_fit_text(o),
+            **({"fallback": "log-linear trend if the fit fails"} if method in ("double_exponential", "single_exponential") else {}),
+            **({"percentile": o["dff.f0_percentile"]} if method == "running_percentile" else {}),
         },
         "dff": {
-            "with_reference": "motion-corrected residual / bleaching baseline",
-            "without_reference": "(465 - bleaching baseline) / bleaching baseline",
+            "with_reference": with_reference,
+            "without_reference": "(465 - bleaching baseline) / bleaching baseline" if method in ("double_exponential", "fitted_isosbestic") else "(465 - baseline) / baseline",
         },
-        "denoise": {
-            "filter": "Butterworth low-pass, zero-phase (scipy filtfilt)",
-            "cutoff_hz": P.DENOISE_CUTOFF_HZ,
-            "order": P.DENOISE_ORDER,
-        },
+        "denoise": ({"filter": f"Butterworth low-pass, zero-phase (scipy {'filtfilt' if legacy_filter else 'sosfiltfilt'})",
+                     "cutoff_hz": o["denoise.cutoff_hz"], "order": o["denoise.order"]} if o["denoise.enabled"] else {"filter": "none"}),
         "smoothing": {
             "method": "moving average (applied before event-locked analyses)",
-            "window_s": shared.SMOOTH_WINDOW_SEC,
+            "window_s": o["smoothing.window_s"],
         },
-        "zscore": {
-            "baseline": "the samples before the event (t < event time)",
-            "baseline_artifact_guard": f"samples beyond {zscore_peth.BASELINE_ROBUST_SD:g} robust SDs (1.4826 x MAD) "
-                                       "of the baseline median are pulled in before its mean and SD are taken",
-            "robust_sd_limit": zscore_peth.BASELINE_ROBUST_SD,
-        },
+        "zscore": zscore,
     }
 
 
@@ -233,8 +279,8 @@ def markers_summary(markers, detected_markers=None):
 
 def recording_state(cache, regression_method=None, splices=(), store_labels=None, signal=None):
     """The state of a loaded recording that decides what an analysis sees: its type, length and sampling
-    rate, the motion-correction method, every splice applied (in order), the markers (counts and
-    digests, see markers_summary), the store renames in effect, and which signal was analysed. `cache` is
+    rate, the motion-correction method, the pipeline options it was processed with (pipeline.py), every splice applied (in order),
+    the markers (counts and digests, see markers_summary), the store renames in effect, and which signal was analysed. `cache` is
     the dict of recording.py."""
     x = cache["x"]
     store = cache.get("store")
@@ -256,6 +302,8 @@ def recording_state(cache, regression_method=None, splices=(), store_labels=None
         out["signal_labels"] = {k: sig["label"] for k, sig in cache["signals"].items()}
     if regression_method is not None:
         out["regression_method"] = regression_method
+    if cache.get("pipeline"):
+        out["pipeline"] = dict(cache["pipeline"])
     if store_labels:
         out["store_labels"] = dict(store_labels)
     if signal is not None:

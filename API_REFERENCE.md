@@ -29,6 +29,7 @@ Install: `pip install PyATCLI` (called PhysicsLibrary — PyPI `ZaksPhysicsLibra
   * [Area under the curve](#area-under-the-curve)
   * [Peri-event statistics](#peri-event-statistics)
 * [Non-destructive splicing](#non-destructive-splicing)
+* [Pipeline options and the methods text](#pipeline-options-and-the-methods-text)
 * [Recordings and saved state](#recordings-and-saved-state)
 * [Writing saved state](#writing-saved-state)
 * [Output folders](#output-folders)
@@ -99,7 +100,7 @@ Top-level dispatcher — detects the format (unless `fmt` is given
 explicitly) and routes to the matching loader.
 
 * `regression_method` (`"ransac" | "huber" | "ols"`): TDT-only, forwarded
-to the motion-correction step (see [`process_tdt_folder`](#process_tdt_folderfolder_path-regression_methodols-progressnone)). Ignored for Oxysoft, which has no
+to the motion-correction step (see [`process_tdt_folder`](#process_tdt_folderfolder_path-regression_methodols-progressnone-optionsnone)). Ignored for Oxysoft, which has no
 such correction step.
 
 ### `load_dataset_file(file_path: str, progress=None) -> Dataset`
@@ -210,13 +211,15 @@ NaN and inf are kept as they are.
 
 ## TDT Photometry Processing
 
-### `process_tdt_folder(folder_path, regression_method="ols", progress=None)`
+### `process_tdt_folder(folder_path, regression_method="ols", progress=None, options=None)`
 
 The full photometry pipeline, and the main TDT entry point: load block →
 extract 465nm signal (+ optional 415nm isosbestic reference) → motion
 correction → bleaching baseline → ΔF/F → denoise → event markers.
 ΔF/F is the motion-corrected residual divided by the 465 channel's
-bleaching baseline (`f0`); everything is computed in float64.
+bleaching baseline (`f0`); everything is computed in float64. `options` are the
+[pipeline options](#pipeline-options-and-the-methods-text) (the regression's fit window, what F0 is, the
+low-pass filter); `None` is the defaults, which are what this did before they were options.
 
 * `regression_method` (`"ransac" | "huber" | "ols"`, see
 [`REGRESSION_METHODS`](#regression_methods) below) — which regression the
@@ -301,7 +304,7 @@ optional downsampling.
 
 Estimates and removes the photobleaching trend via masked curve fitting.
 
-### `denoise_signal(signal, fs, cutoff=5, order=2)`
+### `denoise_signal(signal, fs, cutoff=5, order=2)` — at the default 5 Hz, order 2 the filter is `filtfilt` as it always was; any other setting uses `sosfiltfilt` (second-order sections)
 
 Low-pass Butterworth filter for ΔF/F signals.
 
@@ -483,6 +486,14 @@ the recording itself.
 `found` is `False` (with the rest `None`) if the window was unusable or
 nothing cleared `z_threshold`.
 
+#### `peak_scan_summary(groups, nulls=None) -> list[dict]`
+
+The table of a Peak Finder scan of several event types: one row per type -- `{"event", "occurrences", "found", "hit_rate", "avg_z", "chance_hit_rate",
+"p_shuffle", "p_holm"}` -- the most often aligned first (ties keep the order of `groups`). `groups` is `{name: [find_peak_near_events results]}`; `nulls`
+is `{name: shuffle_null_near_events answer}` (with `p_count_holm`, as the engine gives it) or `None`. `avg_z` is the average z-score of the peaks that were
+found (`None` if none were); the three chance fields are `None` where no null was measured for that type. The engine's `compute.peaks` (scope `events`)
+returns it as `summary`, and the `peak_finder` analysis's `scan` table is made of the same rows, so PyAT's window, its CSV and a script agree.
+
 #### `shuffle_null_near_events(time_array, signal, event_times, pre, post, z_threshold=5.0, include_troughs=False, n_shuffles=1000, seed=0, progress=None) -> dict`
 
 How often `find_peak_near_events` finds a "response" **by chance** on this
@@ -571,6 +582,14 @@ Per-trial + group version of the above, mirroring `compute_auc_matrix`.
 Returns `{"per_trial": [...], "group": {...}}`, each entry
 `{"peak_amplitude", "latency", "mean_bins"}`.
 
+#### `bin_ranges(edges) -> list[str]`
+
+The names of the mean-time bins in `edges` (a `mean_bins` list) as `"start-end"` in
+seconds: `"0.0-1.0"`, `"1.0-2.0"`, ... Each edge is written with the fewest decimals
+(at least one) that show it as it is, so bins of 0.05 s are `"0.00-0.05"`, `"0.05-0.10"`,
+and no two bins share a name. The `event_peth` and `event_compare` tables use them
+for their `Bin <range>s Mean` columns.
+
 ---
 
 ## Non-destructive splicing
@@ -601,6 +620,12 @@ are shifted by the same amount. Same `extra_channels` support as above.
 **Returns** same shape as `splice_keep_inside`, or `None` if there isn't
 usable signal on both sides of the cut to stitch together.
 
+### `trim_range(x, first, last) -> (start, end)`
+
+The range that is left of a recording with time axis `x` once `first` seconds are taken off its start and `last` off its end (the range a
+`keep_inside` splice then keeps; PyAT's *Trim ends* uses it). Raises `ValueError`, in words a person can read, if an amount is negative, both are zero,
+or nothing would be left. `describe_duration(seconds)` is how its messages say a length of time: `"44 s"`, `"2.5 min"` (seconds up to two minutes).
+
 ### `replay_splices(x, splices, markers=None, detected_markers=None) -> dict`
 
 Replays a saved list of splices (PyAT's `splice.json`: `{"mode", "start",
@@ -615,6 +640,63 @@ samples is skipped, as PyAT skips it.
 how many splices took effect).
 
 ---
+
+## Pipeline options and the methods text
+
+`pipeline.py` is the registry of the choices the processing makes — one place, declared next to the code that obeys them — and `methods.py` writes the methods paragraph from them.
+
+|option|default|what it does|
+|-|-|-|
+|`motion.fit_start_s`, `motion.fit_end_s`|`None`|fit the motion-correction regression only on the samples from / to this time (seconds on the recording's time axis); the fitted line is applied to every sample|
+|`motion.exclude_start_s`, `motion.exclude_end_s`|`None`|leave this stretch out of the regression (both or neither)|
+|`dff.f0_method`|`"double_exponential"`|what the motion-corrected signal is divided by: `double_exponential`, `single_exponential`, `linear` (fitted to the samples above the stream's median), `fitted_isosbestic` (GuPPy's (465 - fitted 415) / fitted 415; with no 415 stream the double exponential is used, with a `RuntimeWarning`), `running_median`, `running_percentile`|
+|`dff.f0_window_s`, `dff.f0_percentile`|`60.0`, `10.0`|the window and percentile of the running baselines (evaluated every window/10 and joined by straight lines)|
+|`denoise.enabled`, `denoise.cutoff_hz`, `denoise.order`|`True`, `5.0`, `2`|the zero-phase Butterworth low-pass filter of the dF/F; the default setting is computed as it always was (`filtfilt`), any other with `sosfiltfilt`|
+|`smoothing.window_s`|`0.5`|the moving average every event-locked analysis smooths the dF/F with first (0: none)|
+|`zscore.baseline_start_s`, `zscore.baseline_end_s`, `zscore.statistic`|`None`, `0.0`, `"mean_sd"`|the baseline a trial is z-scored against, in seconds from the event (`None`: the start of the window; 0: the event), and `mean_sd` (with the robust pull-in) or `median_mad` (median and 1.4826 x MAD)|
+
+Every default is what the code did before the option existed, bit for bit, so a recording saved before the options replays unchanged.
+
+### `PipelineOptions(values=None)`
+
+The value of every option: the given `{name: value}` checked, the defaults for the rest. `ValueError` says what is wrong (an unknown name lists the real ones; a value out of range; a window that ends
+before it starts). `options["denoise.cutoff_hz"]`, `.to_dict()` (every option), `.changed()` (only the non-defaults), `.is_default()`, `.with_values({...})`, `.step_values("denoise")`;
+`PipelineOptions.from_dict(x)` accepts a dict, a `PipelineOptions` or `None`; `pipeline.options_of(cache)` is the options a loaded recording was processed with.
+
+### The registry
+
+* `pipeline.describe() -> dict` (`pl.describe_pipeline`) — the steps (each with the kinds of recording it applies to, `sources`: `["TDT"]` for the motion correction, the dF/F baseline and the filter, `None` for the rest) and, for each option, `name`, `kind`, `default`, `label`, `doc`, `choices`, `minimum`, `maximum`, `unit`; the engine's `pipeline.options` and
+  `python -m PyATCLI pipeline` are this. `pipeline.defaults()`, `pipeline.all_options()`, `pipeline.steps()`.
+* `pipeline.parse_assignments(["denoise.cutoff_hz=8"]) -> dict` — what the command line's `--pipeline` flags become.
+* To add an option: declare it with `pipeline.register_step(name, title, order, [pipeline.Option(...)], check=...)` in the module that does the work, read it where it is used, and give the step a sentence with
+  `@pipeline.sentence(name)` (`clause=True` for a clause of the sentence that says how the dF/F was made). Nothing else changes: the saved state, the provenance record, the command line, the engine and the app's
+  dialog read the registry.
+
+### Where the options go
+
+`compute_dff(y_465, y_415, fs, regression_method="ols", progress=None, options=None, x=None)` and `process_tdt_folder(folder_path, regression_method="ols", progress=None, options=None)` take them (`x` is the
+time axis the regression's window is counted on); `load_recording(path, ..., pipeline={name: value})` processes with them, on top of what is saved for the recording; `smooth_for(cache, y)` and
+`get_zscore_slice(..., options=)` / `compute_event_zscore_peth(..., options=)` / `find_peak_near_events(..., options=)` apply the analysis ones; `cache["pipeline"]` holds what a recording was processed with
+(splices and analyses read it there); `saved_state.set_pipeline(path, {...})` / `write_saved_pipeline(path, options)` keep them in `JSON saves/pipeline.json`; `provenance.pipeline_parameters(regression_method,
+options)` reports them in a record.
+
+### `processing_text(options=None, regression_method="ols") -> str`
+
+How the dF/F was made, as the sentence of a methods section ("dF/F was computed by OLS regression of the 415 nm channel onto the 465 nm channel, ... low-pass filtered (...)", no
+final full stop): the motion correction, the baseline and the filter for `options` (`{name: value}`, a `PipelineOptions` or `None` for the defaults) on a TDT recording with a 415 nm
+reference. The group analysis's report uses it for its own methods paragraph.
+
+### `methods_text(state=None, *, software=True, regression_method=None, splices=None, app=None) -> str`
+
+The methods paragraph for a paper: each step's sentence for the values in force, in the order of the pipeline (the motion correction, the baseline and the filter are clauses of one sentence; splices,
+smoothing and the z-score are sentences of their own), then — unless `software` is False — "Analyses were run with PyATCLI ... on Python ..., numpy ..., scipy ...". `state` is a recording's path (what is saved for it is
+read), a provenance record or the path of one (what produced that export, with the software that did), a recording state, a cache, a `PipelineOptions` or `{name: value}`, or `None` (the defaults). A step with
+nothing to say for the recording (the dF/F steps for an Oxysoft export, splices for an unspliced recording) says nothing; a recording with no 415 nm stream is described as computed from the 465 alone.
+
+```python
+>>> pl.methods_text(software=False).split(". ")[0] + "."
+'dF/F was computed by OLS regression of the 415 nm channel onto the 465 nm channel, with the fitted 415 subtracted, then divided by a double-exponential photobleaching baseline fitted to the 465 nm channel, then low-pass filtered (Butterworth, 2nd order, 5 Hz, zero-phase).'
+```
 
 ## Recordings and saved state
 
@@ -632,6 +714,7 @@ that dict, so a script gets the same numbers the app shows.
 |`store`|a display name: the folder / file / table name, plus a tag per splice|
 |`x`, `fs`|time axis (s) and sampling rate (Hz)|
 |`markers`|user-placed markers (see [Markers](#markers))|
+|`pipeline`|the [pipeline options](#pipeline-options-and-the-methods-text) the recording was processed with, `{name: value}` for every option|
 |TDT: `raw`, `corr`, `detected_markers`, `signals`|motion-corrected fluorescence, dF/F, TDT's own events, and `{key: {"label", "y"}}` for `normalized`, `main_driver`, `isosbestic`|
 |Oxysoft: `o2hb`, `hhb`, optional `thb`, `detected_markers`, `fit_factor_mean`|`(n_channels, n_samples)` arrays|
 |Generic: `y_columns`, `x_label`|`{header: y}` and the x column's header|
@@ -649,6 +732,9 @@ folder: inside a folder source (TDT), beside a file source (Oxysoft, Generic).
 * `annotation_sidecar_path(source_path, filename)` — the same place for
   `highlights.json` / `text_annotations.json`.
 * `splice_sidecar_path(source_path)` — `splice.json`, next to `markers.json`.
+* `pipeline_sidecar_path(source_path)` — `pipeline.json`: the pipeline options chosen for the recording (every option; there is no file while all are defaults).
+  `read_saved_pipeline(source_path) -> dict` ({} if none; `ValueError` if the registry does not accept it) and `resolve_pipeline(source_path, explicit=None, use_saved=True) -> (PipelineOptions, warnings)`
+  (the defaults, then what is saved, then `explicit` on top).
 * `read_saved_splices(source_path) -> list[dict]` — every saved splice in the
   order it was applied (`[]` if none; the old single-splice dict format is
   accepted).
@@ -870,6 +956,7 @@ round-trips through JSON with `to_dict()` / `GroupSpec.from_dict(d)`.
 | `correction` | `"holm"` | multiple-comparison correction across pairwise comparisons: `"holm"`, `"bonferroni"` or `"fdr_bh"` |
 | `alpha` | `0.05` | significance level a corrected p-value is compared against |
 | `regression_method` | `"ols"` | motion correction used when each recording's ΔF/F is recomputed |
+| `pipeline` | `{}` | pipeline options (`pipeline.py`) every recording is processed with, `{option name: value}` — only the ones that are not their default — on top of what each recording has saved for itself; `zscore.statistic` (`median_mad`) also decides how a trial's baseline is taken. `GroupSpec.from_pipeline(options, **fields)` makes a spec from them, with `smooth_seconds` starting from `smoothing.window_s` and `baseline` from `zscore.baseline_start_s` / `baseline_end_s` where those are set (what `fields` gives is used as it is) |
 
 The defaults follow TDT's own fiber photometry epoch-averaging example
 (`TRANGE = [-10, 20]` there is start and *duration*: −10 s to +10 s; baseline
@@ -998,6 +1085,19 @@ The plain-text report `write_group_results` writes to
 `analysis_report.txt`: the design, the results per measure (with the
 notes), and an auto-written methods paragraph to adapt for a manuscript.
 
+### `pooled_subject_values(means, measure, groups) -> dict`
+### `summary_stats(values) -> dict`
+### `normal_qq(values) -> dict`
+### `significance_stars(p) -> str`
+
+The numbers the figures of a group analysis are made of (`analysis/group/figure_stats.py`), so a script, the data file beside a figure and PyAT's picture of it
+all agree. `pooled_subject_values(results.subject_means, "auc", {"label": [marker names], ...})` gives `{label: {subject: value}}`: each subject's value for a
+group of markers is the average of whichever of them it has data for (every label is in the answer, in the order given). `summary_stats(values)` is
+`{"n", "mean", "sem", "q1", "median", "q3"}` of a group's values (`sem`, the sample standard deviation over the square root of n, is `None` below two values; all
+`None` but `n` for none). `normal_qq(values)` is what a normal Q-Q plot draws: `{"theoretical", "ordered", "slope", "intercept"}`. `significance_stars(p)` writes
+a p-value as `"***"` (below 0.001), `"**"` (0.01), `"*"` (0.05), `"ns"`, or `""` for a p that is not a number. The mean and SEM across subjects of a trace are
+`compute_group_stats`.
+
 ### `scan_recordings(folders, base_path, store_labels=None, progress=None) -> list[dict]`
 ### `scan_recording(folder, base_path, store_labels=None, progress=None) -> dict`
 
@@ -1015,11 +1115,14 @@ back with its `error` set; it never stops the others.
 Each recording's folder name; two that share one get their path from `base_path`
 on, so names start out unique.
 
-### `load_group_recording(folder, regression_method="ols", store_labels=None, progress=None) -> dict`
+### `load_group_recording(folder, regression_method="ols", store_labels=None, progress=None, pipeline=None) -> dict`
 
 One recording exactly as the single-recording analyses see it:
 `load_tdt_recording`, reduced to `{"x", "y", "fs", "groups", "n_splices",
-"warnings"}` — `y` the normalized dF/F, `groups` the events by name.
+"warnings"}` — `y` the normalized dF/F, `groups` the events by name. `pipeline`
+is `{option name: value}`: pipeline options to process it with, on top of the ones saved for it;
+a choice the recording saved for itself that `pipeline` did not make is used, and said in `warnings`.
+`run_group_analysis` passes the spec's `pipeline` to its loader (only when the spec has some).
 
 ### `run_group_analysis(spec, out_dir=None, progress=None, load=load_group_recording, extra_writers=()) -> GroupResults`
 
@@ -1130,9 +1233,25 @@ dict and fills in the defaults without running anything.
 | `fft_window` | power spectrum of a window and its top peaks | `peaks` |
 | `curve_fit` | fit a model to the stretch between two times | `fit` |
 | `event_peth` | every occurrence of one event aligned to it: trials, mean/SEM, AUC, peak, time bins | `zscore`, `mean_sem`, `trials`, `auc`, `peak`, `bins` |
+| `event_compare` | the average Z-score of several events overlaid: each one's mean/SEM trace, and its peak, latency, AUC and time bins side by side | `traces`, `summary` |
 | `peak_finder` | statistically significant peaks: whole recording (after a `start_buffer_s`), or near events (with the shuffle-null's p-values, `n_shuffles`) | `peaks` / `alignment` / `scan` by `scope` |
 | `event_intervals` | the time between markers | `intervals` |
 | `process` | the processed traces themselves (dF/F and the raw channels) | `trace` |
+| `recording_overview` | the whole recording's traces one above another (control, signal, control fit, dF/F) with the Z-score of the dF/F over the whole recording | `overview` |
+
+`recording_overview` takes `signal` (which of the recording's signals to z-score, `normalized` by default), `method` (`standard`: (x - mean) / SD of the whole trace;
+`robust`: the same with the mean and SD taken after samples further than 5 robust SDs from the median are pulled in to that limit, the rule the other analyses
+use for a baseline), `panels` (a list of panel names to keep, in the order to keep them; all of them if left out) and `max_points` (0: every sample; otherwise about that many rows, keeping the lowest and highest sample of every trace in each stretch so no peak is lost;
+the Z-score is always taken over every sample). Its table `overview` has `time_s` and a column per panel: for a TDT recording `Control` (the isosbestic stream), `Signal`
+(the main driver), `Control Fit` (the signal minus what motion correction left, i.e. the control fitted to the signal), `Z-Score` and `ΔF/F`; for any other recording each
+channel and `Z-Score (<channel>)`. The summary has the mean and SD the Z-score used.
+
+`event_compare` takes `events` (a list of names as the app lists them; all of the recording's events if left out), `pre_s`, `post_s` and `bin_s`.
+Each event is analysed exactly as `event_peth` does it (every occurrence z-scored against its own baseline, all usable trials averaged), so an
+event's row in `summary` is its `GROUP` row in `event_peth`'s `peak`, `auc` and `bins` tables; `traces` holds every event's mean and SEM in one long table
+(`Event`, `time_from_event_s`, `mean`, `sem`, `n`) for overlaying. An event with no usable trial is left out with a note. The times it used are recorded
+as `event_groups`, so a provenance record replays it without the markers. Names are parameters of type `strs`: a list, or one name as plain text
+(`--param events='["Lever","Reward"]'` on the command line); a name is never split on commas, because a note's text can hold one.
 
 `python -m PyATCLI kinds` prints every parameter of each. The signal-taking
 analyses take `signal` (`normalized` by default; for TDT also `main_driver`,
@@ -1274,7 +1393,7 @@ numbers agree.
 | `run KIND RECORDING [--param NAME=VALUE ...]` | run one analysis; writes CSV tables and a provenance record to `--out`, or under an Output folder with `--output-folder` |
 | `reproduce RECORD [--compare EXPORT.csv ...]` | run an analysis again from its `.provenance.json` and check the numbers |
 | `batch JOBS.json` | many analyses over many recordings (a folder of TDT blocks counts as many) |
-| `group setup FOLDER... --name N [--marker M ...]` | set up a group analysis as the wizard does: find the recordings, list the markers they share (without `--marker`), check the design, write `analysis_settings.json` |
+| `group setup FOLDER... --name N [--marker M ...]` | set up a group analysis as the wizard does: find the recordings, list the markers they share (without `--marker`), check the design, write `analysis_settings.json` (`--pipeline NAME=VALUE` puts pipeline options in it) |
 | `group run SETTINGS` | run a group analysis from its `analysis_settings.json` (or its folder): tables, a report and a record |
 | `saved ACTION RECORDING ...` | what Save Changes saves, from a script: `show`, `marker`, `unmark`, `splice`, `unsplice`, `rename`, `highlight`, `text`, `clear` |
 | `serve` | the engine: these operations as JSON lines on standard input and output, with recordings kept open (what PyAT's window talks to; see [The engine](#the-engine)) |
@@ -1310,7 +1429,7 @@ errors are on standard error, and anything a library prints on its own (the TDT 
 so `... --json | jq` always sees valid JSON. A failure under `--json` is one line on standard error,
 `{"schema": 1, "ok": false, "error": {"code", "message", "hint", "type"}}`, with the code one of `bad_parameter`,
 `invalid_input`, `not_found`, `io_error`, `analysis_failed`, `cannot_reproduce`, `unknown_operation`, `no_recording`,
-`confirmation_required`, `cancelled`, `internal_error`; without it, `error: <what is wrong>` and, indented, what to do about
+`confirmation_required`, `missing_package`, `cancelled`, `internal_error`; without it, `error: <what is wrong>` and, indented, what to do about
 it. A bug (an exception nobody expected) says so and what to report; `--debug` adds the traceback. Colour is never used.
 
 **Where results go.** `run`, `batch`, `group run` and `group setup` take `--out DIR` (exactly there) or `--output-folder
@@ -1369,7 +1488,7 @@ them with their parameters.
 | `group.setup`, `group.run`, `group.scan` | the Hypothesis Testing wizard's steps; `group.scan` lists what each recording holds (markers, length, saved splices) without processing it |
 | `saved.show`, `.marker`, `.unmark`, `.splice`, `.unsplice`, `.rename`, `.highlight`, `.text`, `.clear`, `.write` | what Save Changes saves (`write` replaces whole lists) |
 | `recording.open`, `.view`, `.splice`, `.labels`, `.close`, `.list` | engine only: recordings held open between requests (below) |
-| `compute.event_peth`, `compute.peaks` | the Event PETH window's trial matrix, and Peak Finder (`start_buffer_s`; `n_shuffles` and `seed` add a `null` per event type, with `p_count_holm` across the types, off by default here) |
+| `compute.event_peth`, `compute.peaks` | the Event PETH window's trial matrix, and Peak Finder (`start_buffer_s`; `n_shuffles` and `seed` add a `null` per event type, with `p_count_holm` across the types, off by default here; scope `events` also answers `summary`, `peak_scan_summary`'s rows) |
 | `files.inspect`, `pt2.load` | what a path is (a TDT block, a folder with blocks under it, an Oxysoft export, a table file); a Terranova `.pt2` image as an `.npy` file |
 | `provenance.write` | the provenance record beside an export (`<export>.provenance.json`) |
 | `fieldstudy.fields`, `.run`, `.validate` | the text field study and its statistical validation (they embed text with a language model) |
@@ -1656,6 +1775,12 @@ Standardized mean difference between two distributions (pooled std
 units) — rough guide \~0.2 small, \~0.5 medium, \~0.8 large. Typically
 called with `group1` = same-subject similarities, `group2` = pooled
 null similarities.
+
+### `validation_verdict(p_value_fdr, ci_lower) -> str`
+
+The plain-language quick read of one pair's numbers, which is the `verdict` column of `build_validation_summary`: `"Likely a real effect"` (corrected p
+under 0.05 and the bootstrap interval clear of zero), `"Weak/borderline — worth more subjects"` (corrected p under 0.10), `"No evidence of an effect"`, or
+`"Not enough data yet"` when there is no p. Not a substitute for the columns it is read from.
 
 ### `benjamini_hochberg(p_values) -> ndarray`
 

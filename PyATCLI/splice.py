@@ -151,6 +151,29 @@ MODE_CUT_OUT = "cut_out"
 MODE_KEEP_INSIDE = "keep_inside"
 
 
+def describe_duration(seconds):
+    """A length of time in words for a message: "44 s", "2.5 min" — seconds up to two minutes, minutes beyond."""
+    return f"{seconds:.4g} s" if abs(seconds) < 120 else f"{seconds / 60:.4g} min"
+
+
+def trim_range(x, first, last):
+    """
+    The (start, end) of what is left of a recording whose time axis is `x` once `first` seconds are taken off its start and `last` seconds off its end:
+    the range a keep-inside splice then keeps (start and end are times on the axis, not sample numbers).
+
+    Raises ValueError, with the message a person can read, if an amount is negative, if both are zero (nothing is trimmed), or if the amounts leave
+    no time at all.
+    """
+    if first < 0 or last < 0:
+        raise ValueError("Enter amounts of zero or more.")
+    if first == 0 and last == 0:
+        raise ValueError("Enter how much to take off the start, the end or both.")
+    t0, t1 = float(x[0]), float(x[-1])
+    if first + last >= t1 - t0:
+        raise ValueError(f"That trims the whole recording ({describe_duration(t1 - t0)} long).")
+    return t0 + first, t1 - last
+
+
 def replay_splices(x, splices, markers=None, detected_markers=None):
     """
     Replays a saved list of splices on a time axis and marker lists, without

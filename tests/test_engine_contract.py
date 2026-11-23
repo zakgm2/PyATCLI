@@ -138,12 +138,16 @@ class TestTheDeclaredTablesAreWhatTheAnalysesMake(unittest.TestCase):
         yield "fft_window", {"center_s": 30.0}
         yield "curve_fit", {"t1_s": 20.0, "t2_s": 40.0}
         yield "event_peth", {"event": name}
+        yield "event_compare", {}
+        yield "event_compare", {"events": [name]}
         yield "peak_finder", {}
         yield "peak_finder", {"scope": "all_same_name", "event": name}
         yield "peak_finder", {"scope": "scan_all"}
         yield "peak_finder", {"scope": "one_event", "event": name, "event_time": groups[name][0]}
         yield "event_intervals", {}
         yield "process", {}
+        yield "recording_overview", {}
+        yield "recording_overview", {"method": "robust", "max_points": 500}
 
     def test_every_analysis_declares_its_tables(self):
         declared = describe_kinds()

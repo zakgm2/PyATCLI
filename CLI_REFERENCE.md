@@ -1,6 +1,6 @@
 # PyATCLI command line
 
-`python -m PyATCLI` (or `pyatcli`) — version 2026.11.5.
+`python -m PyATCLI` (or `pyatcli`) — version 2026.11.22.
 
 This page is generated from the program (`python -m PyATCLI docs --format markdown`); the same text is in `--help`.
 
@@ -15,6 +15,8 @@ This page is generated from the program (`python -m PyATCLI docs --format markdo
 - [`info`](#info) — versions of this library, Python and the numerical packages
 - [`serve`](#serve) — the engine: these operations as JSON lines on stdin/stdout, with recordings kept open
 - [`docs`](#docs) — print this command line's reference: markdown, or a man page (or the engine's contract)
+- [`pipeline`](#pipeline) — the options of the processing a recording goes through: what each is, its default and what it takes
+- [`methods`](#methods) — the methods paragraph for a paper: what the pipeline did to a recording or an export, in words
 
 ## Options every command takes
 
@@ -53,6 +55,7 @@ python -m PyATCLI run [options] kind recording
 | `--output-folder DIR` | an Output folder, laid out as PyAT's exports are: <DIR>/<data type>/<recording> (Analysis)/, and a repeat run never overwrites an earlier one |
 | `--regression REGRESSION` | motion-correction method for TDT (default ols) |
 | `--no-saved` | ignore the recording's saved splices and markers (JSON saves/) |
+| `--pipeline NAME=VALUE` | a pipeline option for this run, on top of the ones saved for the recording (see `pipeline`); repeat for several |
 | `--table TABLE` | generic file: which table to open |
 | `--x X` | generic file: the x column (default the first) |
 | `--y Y ...` | generic file: the trace columns (default all the others) |
@@ -112,6 +115,7 @@ python -m PyATCLI batch [options] jobs
 | `--output-folder DIR` | an Output folder, laid out as PyAT's exports are: <DIR>/<data type>/<recording> (Analysis)/, and a repeat run never overwrites an earlier one |
 | `--regression REGRESSION` | motion-correction method for TDT (default ols) |
 | `--no-saved` | ignore the recording's saved splices and markers (JSON saves/) |
+| `--pipeline NAME=VALUE` | a pipeline option for this run, on top of the ones saved for the recording (see `pipeline`); repeat for several |
 | `--table TABLE` | generic file: which table to open |
 | `--x X` | generic file: the x column (default the first) |
 | `--y Y ...` | generic file: the trace columns (default all the others) |
@@ -170,6 +174,7 @@ python -m PyATCLI group setup [options] folders ...
 | `--correction CORRECTION` | multiple-comparison correction (default holm) |
 | `--alpha ALPHA` | significance level (default 0.05) |
 | `--regression REGRESSION` | motion-correction method for every recording (default ols) |
+| `--pipeline NAME=VALUE` | a pipeline option to process every recording with, on top of the ones saved for it (see `pipeline`); repeat for several. It goes in the settings file; the smoothing and the baseline above stay what they say |
 | `--out, -o DIR` | folder for the settings (and, with --run, the results) |
 | `--output-folder DIR` | an Output folder, laid out as PyAT's exports are: <DIR>/Group Analysis/<group name>, a new folder if the name was used before |
 | `--run` | run the analysis right after, as the wizard's Run Analysis does |
@@ -210,7 +215,7 @@ python -m PyATCLI group run analysis_settings.json --out results
 Writes the files PyAT writes in a recording's JSON saves folder, so what is done here is what was done in the app: either reads it back when it opens the recording.
 
 ```
-python -m PyATCLI saved <show|marker|unmark|splice|unsplice|rename|highlight|text|clear> [options]
+python -m PyATCLI saved <show|marker|unmark|splice|unsplice|rename|pipeline|highlight|text|clear> [options]
 ```
 
 Examples:
@@ -258,6 +263,7 @@ python -m PyATCLI saved marker [options] recording
 | option | |
 |---|---|
 | `--regression REGRESSION` | motion-correction method for TDT (default ols) |
+| `--pipeline NAME=VALUE` | a pipeline option to process the recording with, on top of the ones saved for it (see `pipeline`); repeat for several |
 | `--table TABLE` | generic file: which table to open |
 | `--x X` | generic file: the x column (default the first) |
 | `--y Y ...` | generic file: the trace columns (default all the others) |
@@ -290,6 +296,7 @@ python -m PyATCLI saved unmark [options] recording
 | option | |
 |---|---|
 | `--regression REGRESSION` | motion-correction method for TDT (default ols) |
+| `--pipeline NAME=VALUE` | a pipeline option to process the recording with, on top of the ones saved for it (see `pipeline`); repeat for several |
 | `--table TABLE` | generic file: which table to open |
 | `--x X` | generic file: the x column (default the first) |
 | `--y Y ...` | generic file: the trace columns (default all the others) |
@@ -321,6 +328,7 @@ python -m PyATCLI saved splice [options] recording
 | option | |
 |---|---|
 | `--regression REGRESSION` | motion-correction method for TDT (default ols) |
+| `--pipeline NAME=VALUE` | a pipeline option to process the recording with, on top of the ones saved for it (see `pipeline`); repeat for several |
 | `--table TABLE` | generic file: which table to open |
 | `--x X` | generic file: the x column (default the first) |
 | `--y Y ...` | generic file: the trace columns (default all the others) |
@@ -375,9 +383,36 @@ python -m PyATCLI saved rename [options] recording KEY=NAME ...
 | option | |
 |---|---|
 | `--regression REGRESSION` | motion-correction method for TDT (default ols) |
+| `--pipeline NAME=VALUE` | a pipeline option to process the recording with, on top of the ones saved for it (see `pipeline`); repeat for several |
 | `--table TABLE` | generic file: which table to open |
 | `--x X` | generic file: the x column (default the first) |
 | `--y Y ...` | generic file: the trace columns (default all the others) |
+
+Examples:
+
+```bash
+python -m PyATCLI saved show "D:/rats/Rat7"
+python -m PyATCLI saved marker "D:/rats/Rat7" --time 312.5 --label Lever
+python -m PyATCLI saved splice "D:/rats/Rat7" --mode cut_out --start 40 --end 55
+python -m PyATCLI saved clear "D:/rats/Rat7"          # asks first; --yes to go ahead without asking
+```
+
+### saved pipeline
+
+choose pipeline options for a recording and keep them with it (see `pipeline`)
+
+```
+python -m PyATCLI saved pipeline [options] recording [NAME=VALUE ...]
+```
+
+| argument | |
+|---|---|
+| `recording` | a TDT folder, an Oxysoft .txt export, or a generic table file |
+| `NAME=VALUE` | an option and its value, for example denoise.cutoff_hz=8 or dff.f0_method=running_median |
+
+| option | |
+|---|---|
+| `--reset` | take every saved choice away: the defaults again |
 
 Examples:
 
@@ -544,6 +579,36 @@ Examples:
 python -m PyATCLI docs --format man --out pyatcli.1 && man ./pyatcli.1
 python -m PyATCLI docs --format markdown --out CLI_REFERENCE.md
 ```
+
+## pipeline
+
+the options of the processing a recording goes through: what each is, its default and what it takes
+
+```
+python -m PyATCLI pipeline [options]
+```
+
+## methods
+
+Writes the methods paragraph from what was actually done: the pipeline options in force for a recording (its saved choices, its splices, whether it has a 415 nm reference), each step in words, and the software and package versions. Given a provenance record instead of a recording, it describes what produced that export, with the software that did.
+
+```
+python -m PyATCLI methods [options] source
+```
+
+| argument | |
+|---|---|
+| `source` | a recording (a TDT folder, an Oxysoft .txt export, a table file), or a .provenance.json written beside an export |
+
+| option | |
+|---|---|
+| `--no-software` | leave the software and package versions out |
+| `--regression REGRESSION` | motion-correction method for TDT (default ols) |
+| `--no-saved` | ignore the recording's saved splices and markers (JSON saves/) |
+| `--pipeline NAME=VALUE` | a pipeline option for this run, on top of the ones saved for the recording (see `pipeline`); repeat for several |
+| `--table TABLE` | generic file: which table to open |
+| `--x X` | generic file: the x column (default the first) |
+| `--y Y ...` | generic file: the trace columns (default all the others) |
 
 ## Exit status
 

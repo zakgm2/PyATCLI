@@ -74,20 +74,32 @@ The layers: `sources/` reads a format and computes (`processing_*`), and `source
 pip install PyATCLI
 ```
 
-That also installs the `pyatcli` command (`python -m PyATCLI` is the same thing). For the development version:
+**Everything at once:** `pip install "PyATCLI[all]"`. The plain line above is the **core**: it also installs the `pyatcli` command (`python -m PyATCLI` is the same thing). Readers for more formats, and the one feature that needs a very large package, are extras, so you install only what you need:
+
+| Install | What it adds |
+|---|---|
+| `pip install PyATCLI` | the core: every analysis, the group analysis, the command line and the engine, and the readers that need no package of their own (CSV, TSV and text tables, Oxysoft exports, PT2 images) |
+| `pip install "PyATCLI[tdt]"` | TDT tanks: the `tdt` package (GPL-3.0) and `scikit-learn` (the Huber and RANSAC motion-correction fits) |
+| `pip install "PyATCLI[excel]"` | Excel workbooks (`openpyxl`) |
+| `pip install "PyATCLI[fieldstudy]"` | the text field study's language-model comparison (`sentence-transformers`, which pulls in `torch`: about 650 MB installed on Windows, several GB on Linux, where torch brings NVIDIA CUDA packages) |
+| `pip install "PyATCLI[oxysoft]"`, `[csv]`, `[pt2]` | nothing more: the core already reads Oxysoft exports, CSV/TSV/text tables and PT2 images. These extras exist so a requirements file can name every format a project reads |
+| `pip install "PyATCLI[all]"` | everything above |
+
+Combine them with a comma: `pip install "PyATCLI[tdt,excel]"`. A format whose extra is missing says so when you first use it, with the line to run (`missing_package` on the command line and in the engine), and `python -m PyATCLI info` lists which readers are available. PyAT installs `PyATCLI[tdt,excel]` for you. For the development version:
 
 ```bash
 pip install git+https://github.com/zakgm2/PyATCLI.git
 ```
 
-As a dependency of another project: `PyATCLI>=2026.11.2` in its `requirements.txt` or `pyproject.toml`.
+As a dependency of another project: `PyATCLI>=2026.11.2` in its `requirements.txt` or `pyproject.toml`, with the extras it reads (`PyATCLI[tdt]>=2026.11.2`; the extras exist from the release that introduced them).
 
 ### Requirements
 
 - Python 3.10+
-- `numpy`, `scipy`, `tdt`, `pandas`, `sentence-transformers`, `statsmodels`, `scikit-learn`, `tqdm` (installed automatically)
-- `sentence-transformers` pulls in `torch`/`transformers` as transitive dependencies — a genuinely heavy install (hundreds of MB) if you only need the signal-processing side; only actually loaded when you call `embed_text_fields`/`run_field_study_pipeline`
-- `openpyxl` — only needed for `.xlsx`/`.xls` files; imported lazily with a clear error if missing when you actually try to load Excel
+- The core installs `numpy`, `scipy`, `pandas`, `statsmodels` and `tqdm` automatically
+- `tdt` and `scikit-learn` (extra `tdt`) — only for TDT tanks: the reader, and the Huber and RANSAC motion-correction fits; each is imported when first used
+- `openpyxl` (extra `excel`) — only for Excel workbooks; imported when one is opened
+- `sentence-transformers` (extra `fieldstudy`) — only for the text field study's language-model comparison, loaded when you call `embed_text_fields`/`run_field_study_pipeline`; it pulls in `torch`/`transformers`, a genuinely heavy install (about 650 MB installed on Windows, several GB on Linux, where torch brings NVIDIA CUDA packages) that the other features never need
 
 ---
 
@@ -253,7 +265,7 @@ Everything importable from `PyATCLI` directly:
 | Provenance and reproducing | `build_record`, `write_record`, `read_record`, `recording_state`, `file_fingerprint`, `pipeline_parameters`, `software_versions`, `library_version`, `check_environment`, `markers_summary`, `output_entry`, `sidecar_path_for`, `PROVENANCE_SCHEMA_VERSION`, `PROVENANCE_SUFFIX`, `reproduce_record`, `compare_table`, `Reproduction`, `ReproduceError` (the module `PyATCLI.reproduce` holds the rest) |
 | Splicing | `apply_splice`, `apply_splices`, `spliced_store_name`, `splice_keep_inside`, `splice_cut_out`, `replay_splices`, `MODE_CUT_OUT`, `MODE_KEEP_INSIDE` |
 | Markers | `marker_display_label`, `store_display_name`, `group_markers_by_name`, `compute_marker_intervals` |
-| Analysis | `get_zscore_slice`, `smooth_signal`, `bin_for_heatmap`, `compute_event_zscore_peth`, `compute_fft_slice`, `find_fft_peaks`, `compute_slope_segment`, `fit_model_to_segment`, `find_significant_peaks`, `find_peak_near_events`, `shuffle_null_near_events`, `compute_auc_window`, `compute_auc_from_trace`, `compute_auc_matrix`, `compute_peri_event_from_trace`, `compute_peri_event_matrix`, `compute_group_stats`, `estimate_sample_rate`, `mean_channels` |
+| Analysis | `get_zscore_slice`, `smooth_signal`, `bin_for_heatmap`, `compute_event_zscore_peth`, `compute_fft_slice`, `find_fft_peaks`, `compute_slope_segment`, `fit_model_to_segment`, `find_significant_peaks`, `find_peak_near_events`, `shuffle_null_near_events`, `compute_auc_window`, `compute_auc_from_trace`, `compute_auc_matrix`, `compute_peri_event_from_trace`, `compute_peri_event_matrix`, `bin_ranges`, `compute_group_stats`, `estimate_sample_rate`, `mean_channels` |
 | Group analysis | `GroupSpec`, `scan_recording`, `scan_recordings`, `default_subject_names`, `load_group_recording`, `run_group_analysis`, `write_group_settings`, `read_group_settings`, `GROUP_SETTINGS_FILENAME`, `marker_index`, `common_markers`, `design_summary`, `extract_group_trials`, `fit_group_models`, `GroupResults`, `write_group_results`, `group_report_text` |
 | Curve fit models | `CURVE_FIT_MODELS`, `linear_model`, `single_exponential_model`, `exponential_rise_model`, `double_exponential_model`, `gaussian_model`, `sinusoidal_model`, `visibility_model` |
 | Text field study | `run_field_study_pipeline`, `load_field_study_folder`, `peek_fields`, `flag_low_quality`, `embed_text_fields`, `compute_delta_vector`, `compute_paired_similarity`, `permutation_test_similarity`, `wordcount_confound_check` |

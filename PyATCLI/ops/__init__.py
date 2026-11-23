@@ -32,6 +32,7 @@ import inspect
 import math
 import os
 
+from .._optional import MissingOptionalPackage
 from ..progress import Cancelled
 from ..analyses import AnalysisError, ParameterError
 from ..reproduce import ReproduceError
@@ -63,6 +64,7 @@ ERROR_CODES = {
     "unknown_operation": "there is no such operation",
     "no_recording": "the request names a recording the engine has not opened",
     "confirmation_required": "the request would delete or replace something and was not told to go ahead",
+    "missing_package": "an optional package the request needs is not installed (the message names the pip extra that installs it)",
     "cancelled": "the request was cancelled before it finished",
     "internal_error": "a bug: something unexpected went wrong",
 }
@@ -74,6 +76,8 @@ def error_info(exc):
         return {"code": "cancelled", "message": "cancelled", "hint": None, "type": "Cancelled"}
     if isinstance(exc, OpError):
         return {"code": exc.code, "message": str(exc), "hint": exc.hint, "type": type(exc).__name__}
+    if isinstance(exc, MissingOptionalPackage):         # not a bug: the message already says which `pip install "PyATCLI[...]"` to run
+        return {"code": "missing_package", "message": str(exc), "hint": None, "type": type(exc).__name__}
     message = str(exc) or type(exc).__name__
     if isinstance(exc, ParameterError):
         code = "bad_parameter"

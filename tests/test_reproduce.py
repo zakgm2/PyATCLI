@@ -117,6 +117,19 @@ class TestRoundTrip(DiskCase):
         for name, table in result.tables.items():
             pd.testing.assert_frame_equal(table, rep.result.tables[name])
 
+    def test_a_compare_of_events_comes_back_bit_for_bit_from_the_record_alone(self):
+        params = {"events": ["L1P¹", "L1P⁰"], "pre_s": 2.0, "post_s": 5.0, "bin_s": 1.0}
+        rec_path, result, paths = export(self.folder, self.out, "event_compare", params)
+        self.assertEqual(sorted(result.tables), ["summary", "traces"])
+        record = pv.read_record(rec_path)
+        self.assertEqual(record["analysis"]["parameters"]["event_groups"]["L1P¹"], [4.0, 9.0, 14.0])        # the times, so no markers are needed
+        rep = R.reproduce(rec_path, compare=[self.csv(paths, t) for t in ("traces", "summary")])
+        self.assertTrue(rep.ok)
+        self.assertEqual(rep.warnings, [])
+        self.assertTrue(all(c["max_abs_diff"] == 0 for c in rep.comparisons))
+        for name, table in result.tables.items():
+            pd.testing.assert_frame_equal(table, rep.result.tables[name])
+
     def test_a_record_may_be_given_as_a_dict_or_a_path(self):
         rec_path, result, _ = export(self.folder, self.out, "zscore_window", {"center_s": 9.0, "pre_s": 3, "post_s": 3})
         by_path = R.reproduce(rec_path)
@@ -359,6 +372,15 @@ class TestCompareTable(unittest.TestCase):
         self.assertTrue(R.compare_table(self.path, table)["ok"])
         table["a"] = ["GROUP (checked only)", "y"]
         self.assertIn("'x' vs 'y'", R.compare_table(self.path, table)["message"])
+
+    def test_the_text_nan_in_an_export_is_a_value_that_is_not_there_like_an_empty_cell(self):
+        """PyAT writes a NaN (the mean of a time bin with no samples) as the text 'nan', where the library's own CSVs leave the cell empty."""
+        self.write(pd.DataFrame({"bin": ["nan", "1.5", "NaN"]}))
+        self.assertTrue(R.compare_table(self.path, pd.DataFrame({"bin": [np.nan, 1.5, np.nan]}))["ok"])
+        bad = R.compare_table(self.path, pd.DataFrame({"bin": [np.nan, 1.5, 2.0]}))                 # not a NaN in the result: still a difference
+        self.assertFalse(bad["ok"])
+        self.assertIn("row 3, 'bin'", bad["message"])
+        self.assertFalse(R.compare_table(self.path, pd.DataFrame({"bin": [3.0, 1.5, np.nan]}))["ok"])
 
     def test_columns_and_row_counts_must_agree(self):
         self.write(pd.DataFrame({"a": [1, 2], "b": [3, 4]}))

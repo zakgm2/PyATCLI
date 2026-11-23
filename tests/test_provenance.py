@@ -128,23 +128,41 @@ class TestPipelineParameters(unittest.TestCase):
         self.assertEqual(p["smoothing"]["window_s"], 0.5)
         self.assertEqual(p["zscore"]["robust_sd_limit"], 5.0)
 
-    def test_it_follows_the_constants_rather_than_a_copy_of_them(self):
-        from PyATCLI.analysis import shared, zscore_peth
-        with mock.patch.object(P, "DENOISE_CUTOFF_HZ", 3), mock.patch.object(shared, "SMOOTH_WINDOW_SEC", 0.25), \
-                mock.patch.object(zscore_peth, "BASELINE_ROBUST_SD", 4.0):
-            p = pv.pipeline_parameters()
-        self.assertEqual((p["denoise"]["cutoff_hz"], p["smoothing"]["window_s"], p["zscore"]["robust_sd_limit"]), (3, 0.25, 4.0))
-        self.assertIn("4 robust SDs", p["zscore"]["baseline_artifact_guard"])
+    def test_it_reports_the_options_it_is_given_not_a_copy_of_the_defaults(self):
+        p = pv.pipeline_parameters(options={"denoise.cutoff_hz": 3, "smoothing.window_s": 0.25, "dff.f0_method": "running_median", "zscore.statistic": "median_mad",
+                                            "zscore.baseline_start_s": -4.0, "zscore.baseline_end_s": -1.0})
+        self.assertEqual((p["denoise"]["cutoff_hz"], p["smoothing"]["window_s"], p["photobleaching"]["model"]), (3.0, 0.25, "running median of the 465 stream"))
+        self.assertEqual(p["denoise"]["filter"], "Butterworth low-pass, zero-phase (scipy sosfiltfilt)")        # (any other cutoff or order: second-order sections)
+        self.assertEqual(p["zscore"]["statistic"], "median and MAD (1.4826 x MAD for the SD)")
+        self.assertEqual(p["zscore"]["baseline"], "the samples from -4 s from the event until -1 s from the event")
+        self.assertNotIn("robust_sd_limit", p["zscore"])                                                       # (the artifact guard belongs to the mean and SD)
+        self.assertEqual(p["options"]["denoise.cutoff_hz"], 3.0)
+
+    def test_a_filter_that_is_switched_off_says_so(self):
+        self.assertEqual(pv.pipeline_parameters(options={"denoise.enabled": False})["denoise"], {"filter": "none"})
+
+    def test_the_defaults_name_what_the_pipeline_has_always_done(self):
+        p = pv.pipeline_parameters()
+        self.assertEqual(p["denoise"], {"filter": "Butterworth low-pass, zero-phase (scipy filtfilt)", "cutoff_hz": 5.0, "order": 2})
+        self.assertEqual(p["photobleaching"]["model"], "double exponential fitted to the 465 stream")
+        self.assertEqual(p["dff"]["with_reference"], "motion-corrected residual / bleaching baseline")
+        self.assertEqual(p["motion_correction"]["fit_window"], "all samples")
+        self.assertEqual(p["zscore"]["baseline"], "the samples before the event (t < event time)")
+        self.assertEqual(p["zscore"]["robust_sd_limit"], 5.0)
 
     def test_the_constants_are_what_the_pipeline_really_uses(self):
-        """The record is only honest if the defaults it names are the ones in force."""
+        """The record is only honest if the defaults it names are the ones in force: the registry's defaults are the functions' own."""
         import inspect
+        from PyATCLI import pipeline
         from PyATCLI.analysis import shared, zscore_peth
         d = inspect.signature(P.denoise_signal).parameters
         self.assertEqual((d["cutoff"].default, d["order"].default), (P.DENOISE_CUTOFF_HZ, P.DENOISE_ORDER))
         self.assertEqual(inspect.signature(shared.smooth_signal).parameters["window_sec"].default, shared.SMOOTH_WINDOW_SEC)
         self.assertEqual(inspect.signature(zscore_peth._baseline_mean_std).parameters["n_robust_sd"].default,
                          zscore_peth.BASELINE_ROBUST_SD)
+        defaults = pipeline.defaults()
+        self.assertEqual((defaults["denoise.cutoff_hz"], defaults["denoise.order"], defaults["smoothing.window_s"]),
+                         (P.DENOISE_CUTOFF_HZ, P.DENOISE_ORDER, shared.SMOOTH_WINDOW_SEC))
 
     def test_an_unknown_regression_method_is_refused(self):
         with self.assertRaises(ValueError):

@@ -11,7 +11,7 @@ from PyATCLI.analysis.auc import compute_auc_from_trace
 from PyATCLI.analysis.curve_fit import compute_slope_segment, fit_model_to_segment
 from PyATCLI.analysis.event_peth import (
     compute_auc_matrix, compute_event_zscore_peth, compute_group_stats,
-    compute_peri_event_from_trace, compute_peri_event_matrix,
+    bin_ranges, compute_peri_event_from_trace, compute_peri_event_matrix,
 )
 from PyATCLI.analysis.peak_finder import (
     DEFAULT_START_BUFFER_S, find_peak_near_events, find_significant_peaks, holm_adjust, shuffle_null_near_events,
@@ -218,6 +218,32 @@ class TestPeriEventStats(unittest.TestCase):
         edges = [(b["bin_start"], b["bin_end"]) for b in out["mean_bins"]]
         self.assertEqual(edges, [(0.0, 1.0), (1.0, 2.0), (2.0, 2.5)])
         assert_allclose([b["mean"] for b in out["mean_bins"]], 1.0)
+
+    def test_adding_up_the_bin_widths_never_leaves_an_empty_sliver_bin_at_the_end(self):
+        for post, width in ((6.0, 0.05), (1.0, 0.1), (5.0, 0.01), (20.0, 0.01), (0.9, 0.1), (2.0, 0.07), (3.0, 0.3)):
+            rel = np.linspace(0, post, round(post * 1000) + 1)              # a sample every millisecond
+            bins = compute_peri_event_from_trace(rel, np.ones_like(rel), post=post, bin_width=width)["mean_bins"]
+            self.assertEqual(bins[-1]["bin_end"], post, (post, width))
+            self.assertEqual(len(bins), int(np.ceil(round(post / width, 6))), (post, width))             # 6.0 / 0.05 is 120 bins, not 121
+            self.assertGreater(min(b["bin_end"] - b["bin_start"] for b in bins), 1e-6, (post, width))   # none is rounding error
+            self.assertFalse(any(np.isnan(b["mean"]) for b in bins), (post, width))                     # every bin has samples
+
+    def test_bins_are_named_by_their_edges_with_as_many_decimals_as_it_takes_to_tell_them_apart(self):
+        def named(post, width):
+            rel = np.linspace(0, post, 2001)
+            return bin_ranges(compute_peri_event_from_trace(rel, np.ones_like(rel), post=post, bin_width=width)["mean_bins"])
+        self.assertEqual(named(3.0, 1.0), ["0.0-1.0", "1.0-2.0", "2.0-3.0"])                    # as they always were
+        self.assertEqual(named(2.5, 1.0), ["0.0-1.0", "1.0-2.0", "2.0-2.5"])
+        self.assertEqual(named(2.0, 0.5), ["0.0-0.5", "0.5-1.0", "1.0-1.5", "1.5-2.0"])
+        self.assertEqual(named(1.0, 0.1)[:3], ["0.0-0.1", "0.1-0.2", "0.2-0.3"])
+        self.assertEqual(named(0.3, 0.05)[:6], ["0.00-0.05", "0.05-0.10", "0.10-0.15", "0.15-0.20", "0.20-0.25", "0.25-0.30"])
+        self.assertEqual(named(0.03, 0.01)[:3], ["0.00-0.01", "0.01-0.02", "0.02-0.03"])
+        self.assertEqual(named(0.45, 0.15)[:3], ["0.00-0.15", "0.15-0.30", "0.30-0.45"])         # 0.15 is not "0.1" or "0.2"
+        self.assertEqual(named(0.333, 0.111)[:3], ["0.000-0.111", "0.111-0.222", "0.222-0.333"])
+        self.assertEqual(bin_ranges([]), [])
+        for width in (1.0, 0.5, 0.25, 0.1, 0.07, 0.05, 0.03, 0.02, 0.013, 0.01):
+            labels = named(5.0, width)
+            self.assertEqual(len(set(labels)), len(labels), width)                              # never two bins of one name
 
     def test_no_post_event_samples_gives_zero_peak_and_latency(self):
         rel = np.linspace(-5, -1, 50)

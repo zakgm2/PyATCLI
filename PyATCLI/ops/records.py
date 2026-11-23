@@ -56,7 +56,7 @@ def write(ctx, *, export, kind=None, parameters=None, notes=None, recording=None
         source=source_fingerprint(source) if source else None,
         recording=provenance.recording_state(cache, method, splices, store_labels=store_labels or None, signal=parameters.get("signal"))
         if cache is not None else None,
-        pipeline=provenance.pipeline_parameters(method or "ols") if cache is not None else None,
+        pipeline=provenance.pipeline_parameters(method or "ols", cache.get("pipeline")) if cache is not None else None,
         app=ctx.app, outputs=[export, *(extra_outputs or [])], notes=notes)
     path = provenance.write_record(provenance.sidecar_path_for(export), doc)
     ctx.written(path)

@@ -27,8 +27,10 @@ commands:
   reproduce   run an analysis again from its provenance record and check the numbers
   batch       many analyses over many recordings
   group       group analysis: `group setup` (the wizard), `group run`
-  saved       what the app's Save Changes saves: markers, splices, signal names, highlights, text
+  saved       what the app's Save Changes saves: markers, splices, signal names, highlights, text, pipeline options
   kinds       the analyses and every parameter of each
+  pipeline    the processing options (dF/F baseline, low-pass filter, z-score baseline, ...) and their defaults
+  methods     the methods paragraph for a paper, written from what the pipeline did
   info        versions of this library, Python and the packages
   serve       the engine: these operations as JSON lines on stdin/stdout, with recordings kept open (what PyAT's window talks to)
   docs        this command line's reference: markdown, or a man page
@@ -122,6 +124,8 @@ def add_global(parser, top):
 def _load_flags(sp):
     sp.add_argument("--regression", default="ols", choices=REGRESSION_METHODS, help="motion-correction method for TDT (default ols)")
     sp.add_argument("--no-saved", action="store_true", help="ignore the recording's saved splices and markers (JSON saves/)")
+    sp.add_argument("--pipeline", action="append", metavar="NAME=VALUE",
+                    help="a pipeline option for this run, on top of the ones saved for the recording (see `pipeline`); repeat for several")
     sp.add_argument("--table", help="generic file: which table to open")
     sp.add_argument("--x", help="generic file: the x column (default the first)")
     sp.add_argument("--y", nargs="+", help="generic file: the trace columns (default all the others)")
@@ -157,6 +161,14 @@ Environment: DEBUG=1 (same as --debug).
         return sp
 
     command("info", "versions of this library, Python and the numerical packages", C.cmd_info)
+    command("pipeline", "the options of the processing a recording goes through: what each is, its default and what it takes", C.cmd_pipeline)
+    sp = command("methods", "the methods paragraph for a paper: what the pipeline did to a recording or an export, in words", C.cmd_methods, description=(
+        "Writes the methods paragraph from what was actually done: the pipeline options in force for a recording (its saved choices, its splices, whether it has a "
+        "415 nm reference), each step in words, and the software and package versions. Given a provenance record instead of a recording, it describes what produced "
+        "that export, with the software that did."))
+    sp.add_argument("source", help="a recording (a TDT folder, an Oxysoft .txt export, a table file), or a .provenance.json written beside an export")
+    sp.add_argument("--no-software", action="store_true", help="leave the software and package versions out")
+    _load_flags(sp)
 
     sp = command("serve", "the engine: these operations as JSON lines on stdin/stdout, with recordings kept open", C.cmd_serve, description=(
         "Runs the engine: the operations of the other commands as a long-lived process that speaks one JSON object per line on standard input "
@@ -229,6 +241,9 @@ Environment: DEBUG=1 (same as --debug).
     sp.add_argument("--correction", choices=group_design.CORRECTIONS, default="holm", help="multiple-comparison correction (default holm)")
     sp.add_argument("--alpha", type=float, default=0.05, help="significance level (default 0.05)")
     sp.add_argument("--regression", default="ols", choices=REGRESSION_METHODS, help="motion-correction method for every recording (default ols)")
+    sp.add_argument("--pipeline", action="append", metavar="NAME=VALUE",
+                    help="a pipeline option to process every recording with, on top of the ones saved for it (see `pipeline`); repeat for several. "
+                         "It goes in the settings file; the smoothing and the baseline above stay what they say")
     _where_to(sp, None, "the settings (and, with --run, the results)", group=True)
     sp.add_argument("--run", action="store_true", help="run the analysis right after, as the wizard's Run Analysis does")
 
@@ -248,6 +263,8 @@ Environment: DEBUG=1 (same as --debug).
         sp.add_argument("recording", help="a TDT folder, an Oxysoft .txt export, or a generic table file")
         if load:
             sp.add_argument("--regression", default="ols", choices=REGRESSION_METHODS, help="motion-correction method for TDT (default ols)")
+            sp.add_argument("--pipeline", action="append", metavar="NAME=VALUE",
+                            help="a pipeline option to process the recording with, on top of the ones saved for it (see `pipeline`); repeat for several")
             sp.add_argument("--table", help="generic file: which table to open")
             sp.add_argument("--x", help="generic file: the x column (default the first)")
             sp.add_argument("--y", nargs="+", help="generic file: the trace columns (default all the others)")
@@ -271,6 +288,9 @@ Environment: DEBUG=1 (same as --debug).
     sp.add_argument("number", type=int, help="which one: 1 is the first applied (see `saved show`)")
     sp = action("rename", "give signals names of your own, kept with the recording", C.cmd_saved_rename, load=True)
     sp.add_argument("names", nargs="+", metavar="KEY=NAME", help="the signal's key (main_driver, isosbestic, normalized, ...) and its name; empty NAME takes the rename away")
+    sp = action("pipeline", "choose pipeline options for a recording and keep them with it (see `pipeline`)", C.cmd_saved_pipeline)
+    sp.add_argument("options", nargs="*", metavar="NAME=VALUE", help="an option and its value, for example denoise.cutoff_hz=8 or dff.f0_method=running_median")
+    sp.add_argument("--reset", action="store_true", help="take every saved choice away: the defaults again")
     sp = action("highlight", "Highlighter + Save Changes: shade a stretch of the recording", C.cmd_saved_highlight)
     sp.add_argument("--start", type=float, required=True, help="seconds")
     sp.add_argument("--end", type=float, required=True, help="seconds")

@@ -8,7 +8,7 @@ One function per command: it turns the arguments into an operation's parameters 
 import json
 import sys
 
-from .. import ops
+from .. import ops, pipeline
 from ..analyses import ParameterError
 from ..ops import OpContext, OpError
 from ..ops.common import recording_name   # noqa: F401 — also this module's public name (cli/__init__.py)
@@ -71,6 +71,11 @@ def load_from_flags(args):
         load["regression_method"] = args.regression
     if getattr(args, "no_saved", False):
         load["use_saved"] = False
+    if getattr(args, "pipeline", None):
+        try:
+            load["pipeline"] = pipeline.parse_assignments(args.pipeline)
+        except ValueError as e:
+            raise ParameterError(str(e)) from None
     if getattr(args, "table", None):
         load["table"] = args.table
     if getattr(args, "x", None):
@@ -149,7 +154,40 @@ def cmd_info(args, out):
         out.say(f"Python {result['python']} ({result['implementation']}, {result['bits']}-bit) on {result['platform']}")
         for name, v in result["packages"].items():
             out.say(f"  {name} {v}")
+        readers = [f"{extra} yes" if ok else f"{extra} no (pip install PyATCLI[{extra}])" for extra, ok in result["optional"].items()]
+        out.say("Readers: " + ", ".join(readers))
     out.result("info", result)
+    return EXIT_OK
+
+
+def cmd_methods(args, out):
+    load = load_from_flags(args)
+    source = args.source
+    if source.lower().endswith(".json"):
+        from ..methods import methods_text
+        text = methods_text(source, software=not args.no_software)
+        result = {"text": text}
+    else:
+        result = call(args, out, "methods.text", {"recording": source, "load": load, "software": not args.no_software})
+    out.say(result["text"])
+    out.result("methods", result)
+    return EXIT_OK
+
+
+def cmd_pipeline(args, out):
+    result = call(args, out, "pipeline.options", {})
+    if out.plain:
+        out.table([], [[o["name"], o["kind"], o["default"], o["doc"]] for step in result["steps"] for o in step["options"]])
+    else:
+        for step in result["steps"]:
+            out.say(f"{step['title']}")
+            for o in step["options"]:
+                allowed = (f" one of {', '.join(o['choices'])};" if o["choices"] else
+                           f" from {'-inf' if o['minimum'] is None else format(o['minimum'], 'g')} to {'inf' if o['maximum'] is None else format(o['maximum'], 'g')};"
+                           if o["kind"] in ("float", "int", "seconds_or_none") else "")
+                out.say(f"  {o['name']:<26} {o['kind']:<16}{allowed} default {o['default']!r}. {o['doc']}")
+        out.say("Give one to a command with --pipeline NAME=VALUE; what is chosen for a recording is saved with `saved pipeline` and goes in its provenance record.")
+    out.result("pipeline", result)
     return EXIT_OK
 
 
@@ -264,7 +302,8 @@ def cmd_group_setup(args, out):
         "store_labels": dict(name_pair(t) for t in args.store_label), "pre": args.pre, "post": args.post, "baseline": list(args.baseline),
         "response": list(args.response), "signal": args.signal, "smooth": args.smooth, "measures": args.measure,
         "peak_direction": args.peak_direction, "decay_fraction": args.decay_fraction, "correction": args.correction, "alpha": args.alpha,
-        "regression": args.regression, "out": args.out, "output_folder": args.output_folder, "run": args.run})
+        "regression": args.regression, "pipeline": pipeline.parse_assignments(args.pipeline) or None, "out": args.out, "output_folder": args.output_folder,
+        "run": args.run})
     if result["stage"] == "markers":
         out.say(f"{len(result['recordings'])} recordings under {result['base']}; the markers they have:")
         n = len(result["recordings"])
@@ -292,7 +331,7 @@ def cmd_group_setup(args, out):
 
 def cmd_saved_show(args, out):
     result = call(args, out, "saved.show", {"recording": args.recording})
-    kinds_saved = ("markers", "splices", "signal_labels", "highlights", "text_annotations")
+    kinds_saved = ("markers", "splices", "signal_labels", "highlights", "text_annotations", "pipeline")
     out.say(f"saved state of {result['name']} ({result['folder']})")
     if not any(result[k] for k in kinds_saved):
         out.say("  nothing saved")
@@ -312,6 +351,11 @@ def cmd_saved_show(args, out):
     for t in result["text_annotations"]:
         rows.append(["text", f"{t['x']:.3f}", f"{t['y']:g}", t["text"]])
         out.say(f"  text        ({t['x']:.3f} s, {t['y']:g})  {t['text']}")
+    defaults = pipeline.defaults()
+    for name, value in result["pipeline"].items():
+        if value != defaults[name]:
+            rows.append(["pipeline", name, value, ""])
+            out.say(f"  pipeline    {name} = {value}")
     if out.plain:
         out.table([], rows)
     out.result("saved.show", result)
@@ -360,6 +404,19 @@ def cmd_saved_rename(args, out):
     n = len(result["names"])
     out.say(f"{n} signal name{'s' if n != 1 else ''} saved")
     out.result("saved.rename", result)
+    return EXIT_OK
+
+
+def cmd_saved_pipeline(args, out):
+    try:
+        values = pipeline.parse_assignments(args.options)
+    except ValueError as e:
+        raise ParameterError(str(e)) from None
+    if not values and not args.reset:
+        raise ParameterError("give at least one NAME=VALUE (see `pipeline`), or --reset to go back to the defaults")
+    result = call(args, out, "saved.pipeline", {"recording": args.recording, "set": values, "reset": bool(args.reset)})
+    out.say("pipeline options: " + (", ".join(f"{k} = {v}" for k, v in result["changed"].items()) or "all the defaults (nothing saved)"))
+    out.result("saved.pipeline", result)
     return EXIT_OK
 
 

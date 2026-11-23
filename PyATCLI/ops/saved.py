@@ -1,6 +1,7 @@
 """ops/saved.py — what the app's Save Changes saves next to a recording, read and written."""
 
 from .. import saved_state
+from ..pipeline import PipelineOptions
 from ..recording import HIGHLIGHTS_FILE, TEXT_ANNOTATIONS_FILE
 from . import OpError, operation
 from .common import load_options, recording_name, require_exists
@@ -55,6 +56,18 @@ def rename(ctx, *, recording, names, load=None):
     return {"names": saved}
 
 
+@operation("saved.pipeline", "choose pipeline options for a recording and keep them with it (reset=True: back to the defaults); they are applied whenever it opens", result=["options", "changed"])
+def pipeline_(ctx, *, recording, set=None, reset=False):
+    path = require_exists(recording)
+    if reset:
+        saved_state.write_saved_pipeline(path, {})
+        options = PipelineOptions().to_dict()
+    else:
+        options = saved_state.set_pipeline(path, set or {})
+    ctx.written(saved_state.pipeline_sidecar_path(path))
+    return {"options": options, "changed": PipelineOptions(options).changed()}
+
+
 @operation("saved.highlight", "Highlighter + Save Changes: shade a stretch of the recording")
 def highlight(ctx, *, recording, start, end, color="Yellow"):
     h = saved_state.add_highlight(require_exists(recording), start, end, color)
@@ -78,8 +91,8 @@ def clear(ctx, *, recording, yes=False):
     return {"removed": saved_state.clear_saved_state(path)}
 
 
-@operation("saved.write", "Save Changes: write whole lists — markers, splices, signal names, highlights, text boxes — replacing what was saved", result=["files"])
-def write(ctx, *, recording, markers=None, splices=None, signal_labels=None, highlights=None, text_annotations=None):
+@operation("saved.write", "Save Changes: write whole lists — markers, splices, signal names, highlights, text boxes, pipeline options — replacing what was saved", result=["files"])
+def write(ctx, *, recording, markers=None, splices=None, signal_labels=None, highlights=None, text_annotations=None, pipeline=None):
     path = require_exists(recording)
     files = []
     if markers is not None:
@@ -92,6 +105,8 @@ def write(ctx, *, recording, markers=None, splices=None, signal_labels=None, hig
         files.append(saved_state.write_saved_annotations(path, HIGHLIGHTS_FILE, highlights))
     if text_annotations is not None:
         files.append(saved_state.write_saved_annotations(path, TEXT_ANNOTATIONS_FILE, text_annotations))
+    if pipeline is not None:
+        files.append(saved_state.write_saved_pipeline(path, pipeline))                # all defaults: the file is removed
     files = [f for f in files if f]
     for f in files:
         ctx.written(f)

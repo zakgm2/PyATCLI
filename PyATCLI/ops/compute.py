@@ -16,9 +16,10 @@ import tempfile
 from ..analyses import ParameterError
 from ..analysis.event_peth import compute_event_zscore_peth
 from ..analysis.peak_finder import (
-    DEFAULT_START_BUFFER_S, find_peak_near_events, find_significant_peaks, holm_adjust, shuffle_null_near_events,
+    DEFAULT_START_BUFFER_S, find_peak_near_events, find_significant_peaks, holm_adjust, peak_scan_summary, shuffle_null_near_events,
 )
-from ..analysis.shared import smooth_signal
+from ..analysis.shared import smooth_for
+from ..pipeline import options_of
 from ..progress import Plan
 from ..recording import normalized_signal
 from . import OpError, operation
@@ -59,8 +60,8 @@ def event_peth(ctx, *, recording, event_times, pre, post, num_bins=300, load=Non
     key, label, y = normalized_signal(cache)
     plan = Plan(ctx.progress(), [("Smoothing the signal", 10), ("Aligning trials", 90)])
     plan.begin("Smoothing the signal")
-    clean = smooth_signal(y, cache["fs"])
-    result = compute_event_zscore_peth(cache["x"], clean, times, pre, post, num_bins=int(num_bins), progress=plan.sub("Aligning trials"))
+    clean = smooth_for(cache, y)
+    result = compute_event_zscore_peth(cache["x"], clean, times, pre, post, num_bins=int(num_bins), progress=plan.sub("Aligning trials"), options=options_of(cache))
     return {"signal": key, "label": label, "result": arrays_wire(ctx, result, "event_peth")}
 
 
@@ -90,7 +91,8 @@ def peaks(ctx, *, recording, scope, z_threshold, include_troughs=False, min_dist
         stages = [("Smoothing the signal", 10), ("Searching for peaks", 5), ("Shuffling event times", 85)]
     plan = Plan(ctx.progress(), stages)
     plan.begin("Smoothing the signal")
-    clean = smooth_signal(y, cache["fs"])
+    clean = smooth_for(cache, y)
+    options = options_of(cache)
     plan.begin("Searching for peaks")
     if scope == "whole":
         found = find_significant_peaks(cache["x"], clean, z_threshold=z_threshold, min_distance_sec=float(min_distance_s),
@@ -100,9 +102,10 @@ def peaks(ctx, *, recording, scope, z_threshold, include_troughs=False, min_dist
     if len(groups) == 1:                                                  # one event type: the progress follows its events
         (name, times), = groups.items()
         results = {name: find_peak_near_events(cache["x"], clean, times, pre, post, z_threshold=z_threshold,
-                                               include_troughs=bool(include_troughs), progress=plan.sub("Searching for peaks"))}
+                                               include_troughs=bool(include_troughs), progress=plan.sub("Searching for peaks"), options=options)}
     else:                                                                 # several: one tick per event type
-        results = {name: find_peak_near_events(cache["x"], clean, times, pre, post, z_threshold=z_threshold, include_troughs=bool(include_troughs))
+        results = {name: find_peak_near_events(cache["x"], clean, times, pre, post, z_threshold=z_threshold, include_troughs=bool(include_troughs),
+                                               options=options)
                    for name, times in plan.track("Searching for peaks", groups.items())}
     answer = {"signal": key, "label": label, "groups": results}
     if n_shuffles:                                                        # per event type: p_event, chance_hit_rate, p_count, ... (see shuffle_null_near_events)
@@ -113,9 +116,10 @@ def peaks(ctx, *, recording, scope, z_threshold, include_troughs=False, min_dist
             share = max(1, len(times)) / total
             nulls[name] = shuffle_null_near_events(
                 cache["x"], clean, times, pre, post, z_threshold=z_threshold, include_troughs=bool(include_troughs), n_shuffles=n_shuffles,
-                seed=int(seed), progress=None if stage is None else (lambda f, m="", lo=done, w=share: stage(lo + w * f, m)))
+                seed=int(seed), progress=None if stage is None else (lambda f, m="", lo=done, w=share: stage(lo + w * f, m)), options=options)
             done += share
         for null, adjusted in zip(nulls.values(), holm_adjust([n["p_count"] if n["available"] else None for n in nulls.values()])):
             null["p_count_holm"] = adjusted                                 # across the event types asked about together
         answer["null"] = nulls
+    answer["summary"] = peak_scan_summary(results, answer.get("null"))      # one row per event type: what the scan-all window and its CSV show
     return answer

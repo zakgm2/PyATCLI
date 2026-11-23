@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "PyATCLI"
-version = "2026.11.5"
+version = "2026.11.22"
 description = "The analysis library, engine and command line behind PyAT: TDT fibre photometry, Oxysoft NIRS, Terranova EFNMR and text-field studies, with provenance records (formerly PhysicsLibrary)"
 requires-python = ">=3.10"
 readme = "README.md"
@@ -28,14 +28,21 @@ classifiers = [
 dependencies = [
     "numpy>=2.0",
     "scipy",
-    "tdt",
     "pandas",
-    "openpyxl",
-    "sentence-transformers",
     "statsmodels",
-    "scikit-learn",
     "tqdm",
 ]
+
+# Install only what you need, one extra per file type: `pip install "PyATCLI[tdt]"`, `"PyATCLI[tdt,excel]"`, `"PyATCLI[all]"`. The core does every analysis and
+# reads what needs no package of its own; PyATCLI/_optional.py says what each extra is for and gives the error a missing one raises.
+[project.optional-dependencies]
+tdt = ["tdt", "scikit-learn"]                   # TDT tanks (scikit-learn: the Huber and RANSAC motion-correction fits)
+excel = ["openpyxl"]                            # Excel workbooks
+oxysoft = []                                    # Oxysoft exports: nothing beyond the core (the extra only lets a requirements file name the format)
+csv = []                                        # CSV, TSV and text tables: nothing beyond the core
+pt2 = []                                        # Terranova PT2 images: nothing beyond the core
+fieldstudy = ["sentence-transformers"]          # the text field study's language-model comparison (pulls in torch: about 650 MB installed on Windows, several GB on Linux, where torch brings NVIDIA CUDA packages)
+all = ["tdt", "scikit-learn", "openpyxl", "sentence-transformers"]
 
 [project.urls]
 Homepage = "https://github.com/zakgm2/PyATCLI"

@@ -13,7 +13,7 @@ tool (mirrors physicsanalysis_qt/analysis/'s own layout):
   fft.py          - compute_fft_slice, find_fft_peaks (peak *drawing* is
                     physicsanalysis_qt's own concern, not this library's —
                     see that repo's analysis/fft.py)
-  peak_finder.py  - find_significant_peaks, find_peak_near_events, shuffle_null_near_events
+  peak_finder.py  - find_significant_peaks, find_peak_near_events, peak_scan_summary, shuffle_null_near_events
   curve_fit.py    - compute_slope_segment, fit_model_to_segment
   intervals.py    - compute_marker_intervals
   group/          - group analysis across recordings (a package):
@@ -43,6 +43,7 @@ from .zscore_peth import (
     bin_for_heatmap,
 )
 from .event_peth import (
+    bin_ranges,
     compute_group_stats,
     compute_event_zscore_peth,
     compute_auc_matrix,
@@ -62,6 +63,7 @@ from .peak_finder import (
     DEFAULT_START_BUFFER_S,
     find_significant_peaks,
     find_peak_near_events,
+    peak_scan_summary,
     holm_adjust,
     shuffle_null_near_events,
 )
@@ -81,5 +83,6 @@ from .group import (
 from .group.trials import extract_group_trials, measures_for_trial, decay_time
 from .group.stats import fit_group_models, GroupResults
 from .group.report import write_group_results, report_text as group_report_text
+from .group.figure_stats import pooled_subject_values, summary_stats, normal_qq, significance_stars
 from .group.scan import default_subject_names, scan_recording, scan_recordings
 from .group.run import GROUP_SETTINGS_FILENAME, load_group_recording, run_group_analysis, write_group_settings, read_group_settings

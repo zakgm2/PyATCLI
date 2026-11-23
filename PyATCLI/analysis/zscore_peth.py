@@ -10,15 +10,50 @@ everywhere a peri-event window gets z-scored, not just this one tool.
 
 import numpy as np
 
+from .. import pipeline
 from ..numeric import as_float64
 from .shared import window_around
 
 # How far (in robust SDs) a baseline sample may sit from the baseline's median before it is pulled in for the
 # mean/SD — see _baseline_mean_std. Named so provenance can report it.
 BASELINE_ROBUST_SD = 5.0
+ZSCORE_STATISTICS = ("mean_sd", "median_mad")
 
 
-def get_zscore_slice(time_array, signal, center_t, window=None, pre=None, post=None):
+def _check_baseline_window(values):
+    start, end = values["zscore.baseline_start_s"], values["zscore.baseline_end_s"]
+    if start is not None and not start < end:
+        raise ValueError(f"zscore.baseline_start_s ({start:g}) must be before zscore.baseline_end_s ({end:g})")
+
+
+pipeline.register_step("zscore", "Z-score baseline", 50, [
+    pipeline.Option("zscore", "baseline_start_s", "seconds_or_none", None, "Baseline from", "Where the baseline a trial is z-scored against starts, in seconds from "
+                    "the event (negative is before it). None: the start of the window.", unit="s"),
+    pipeline.Option("zscore", "baseline_end_s", "float", 0.0, "Baseline until", "Where the baseline ends, in seconds from the event. 0: at the event (the samples "
+                    "before it are the baseline).", unit="s"),
+    pipeline.Option("zscore", "statistic", "choice", "mean_sd", "Z-score by", "mean_sd: (x - mean) / SD of the baseline, with the few samples far from its median "
+                    "pulled in first; median_mad: (x - median) / (1.4826 x MAD), which large deviations in the baseline hardly move.", choices=ZSCORE_STATISTICS),
+], check=_check_baseline_window)
+
+
+@pipeline.sentence("zscore")
+def _zscore_sentence(options, state):
+    start, end = options["zscore.baseline_start_s"], options["zscore.baseline_end_s"]
+    if start is None and end == 0:
+        baseline = "the samples before the event"
+    else:
+        first = "the start of the window" if start is None else f"{abs(start):g} s {'before' if start < 0 else 'after'} the event"
+        last = "the event" if end == 0 else f"{abs(end):g} s {'before' if end < 0 else 'after'} the event"
+        baseline = f"the samples from {first} until {last}"
+    if options["zscore.statistic"] == "median_mad":
+        how = "the median and the median absolute deviation (scaled by 1.4826) of that baseline"
+    else:
+        how = (f"the mean and standard deviation of that baseline, after samples more than {BASELINE_ROBUST_SD:g} robust standard deviations "
+               "(1.4826 x the median absolute deviation) from its median were pulled in to that limit")
+    return f"Each trial was z-scored against its own baseline, {baseline}, using {how}"
+
+
+def get_zscore_slice(time_array, signal, center_t, window=None, pre=None, post=None, options=None):
     """
     Extract and z-score a time window around an event.
 
@@ -40,6 +75,10 @@ def get_zscore_slice(time_array, signal, center_t, window=None, pre=None, post=N
         Seconds before center_t to include. Defaults to window/2.
     post : float or None
         Seconds after center_t to include. Defaults to window/2.
+    options : PipelineOptions, dict or None
+        The pipeline's options (pipeline.py): where the baseline starts and ends
+        relative to the event and whether the z-score is by mean and SD or by median
+        and MAD. None: the defaults — the samples before the event, mean and SD.
 
     Returns
     -------
@@ -52,9 +91,14 @@ def get_zscore_slice(time_array, signal, center_t, window=None, pre=None, post=N
     # Baseline is the pre-event portion — the part of the window that
     # actually precedes the event, not just "the first half of the segment"
     # (those differ once pre != post).
-    baseline_mask   = seg_x < center_t
+    options = pipeline.PipelineOptions.from_dict(options)
+    start, end = options["zscore.baseline_start_s"], options["zscore.baseline_end_s"]
+    if start is None and end == 0.0:
+        baseline_mask   = seg_x < center_t
+    else:
+        baseline_mask   = (seg_x < center_t + end) if start is None else ((seg_x >= center_t + start) & (seg_x < center_t + end))
     baseline_period = seg_y[baseline_mask] if baseline_mask.any() else seg_y
-    mu, std = _baseline_mean_std(baseline_period)
+    mu, std = baseline_level_and_spread(baseline_period, options["zscore.statistic"])
 
     # "Flat" means the baseline's spread is down at floating-point rounding
     # level next to its own size — a relative test, so it doesn't depend on
@@ -64,6 +108,16 @@ def get_zscore_slice(time_array, signal, center_t, window=None, pre=None, post=N
         return seg_x, np.zeros_like(seg_y)
 
     return seg_x, (seg_y - mu) / std
+
+
+def baseline_level_and_spread(baseline, statistic="mean_sd"):
+    """(level, spread) of a baseline: what a trial is z-scored against (or has subtracted). `statistic` is the pipeline option zscore.statistic: "mean_sd" (the
+    mean and SD, with the few samples far from the median pulled in first: _baseline_mean_std) or "median_mad" (the median and 1.4826 x the median absolute
+    deviation). The single-recording z-score and the group analysis take it from here, so they cannot disagree."""
+    if statistic == "median_mad":
+        level = np.median(baseline)
+        return level, 1.4826 * np.median(np.abs(baseline - level))
+    return _baseline_mean_std(baseline)
 
 
 def _baseline_mean_std(baseline, n_robust_sd=BASELINE_ROBUST_SD):

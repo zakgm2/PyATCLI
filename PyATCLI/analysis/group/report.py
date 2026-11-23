@@ -13,6 +13,7 @@ import os
 import numpy as np
 import pandas as pd
 
+from ...methods import processing_text
 from . import CORRECTION_LABELS, METRIC_LABELS
 
 REPORT_FILENAME = "analysis_report.txt"
@@ -244,20 +245,26 @@ def report_text(results):
     return "\n".join(out) + "\n"
 
 
+def _baseline_text(spec):
+    """The sentence on how a trial was baseline-corrected: by the mean (or the median, if the pipeline says so) of the baseline window, and for the z-score
+    divided by its spread."""
+    window = f"{spec.baseline[0]:g} to {spec.baseline[1]:g} s"
+    if (spec.pipeline or {}).get("zscore.statistic") == "median_mad":
+        return (f"Each trial was baseline-corrected with the median of {window}" + (" and divided by 1.4826 x the baseline's median absolute deviation" if spec.signal == "zscore" else "") + ".")
+    return (f"Each trial was baseline-corrected with the mean of {window}" + (" and divided by the baseline SD" if spec.signal == "zscore" else "")
+            + " (baseline statistics winsorised at 5 robust SDs).")
+
+
 def _methods(results):
     spec = results.spec
     sw = results.software
     k = len(spec.markers)
     text = [
-        f"Photometry recordings from {len(spec.subjects)} subjects were processed as dF/F (the isosbestic channel "
-        f"regressed out of the signal channel by {spec.regression_method.upper()} regression, photobleaching removed with a "
-        "double-exponential baseline, low-pass filtered at 5 Hz)"
-        + (f" and smoothed with a {spec.smooth_seconds:g} s moving average." if spec.smooth_seconds > 0 else "."),
+        f"Photometry recordings from {len(spec.subjects)} subjects were processed as follows: {processing_text(spec.pipeline, spec.regression_method)}"
+        + (f". The dF/F was then smoothed with a {spec.smooth_seconds:g} s moving average." if spec.smooth_seconds > 0 else "."),
         f"For every occurrence of each marker ({', '.join(spec.markers)}) a window from {spec.pre:g} s before to "
         f"{spec.post:g} s after the event was taken; events whose window extended beyond the recording were excluded. "
-        f"Each trial was baseline-corrected with the mean of {spec.baseline[0]:g} to {spec.baseline[1]:g} s"
-        + (" and divided by the baseline SD" if spec.signal == "zscore" else "")
-        + " (baseline statistics winsorised at 5 robust SDs).",
+        + _baseline_text(spec),
         f"In the response window ({spec.response[0]:g} to {spec.response[1]:g} s) the following were computed per trial: "
         + ", ".join(METRIC_LABELS[m] if METRIC_LABELS[m].isupper() else METRIC_LABELS[m].lower() for m in spec.metrics)
         + f" (AUC by the trapezoidal rule; peak = {_DIRECTION_TEXT[spec.peak_direction]}; "
